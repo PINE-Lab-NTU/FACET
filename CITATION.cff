@@ -1,0 +1,74 @@
+cff-version: 1.2.0
+message: "If you use Facet-0 or ManuFacet-1K in your research, please cite the paper below."
+title: "Facet-0: A Robotic Foundation Model for Contact-Rich Precise Manipulation"
+abstract: >-
+  Facet-0 is a robotic foundation model for contact-rich precise manipulation. It
+  unifies multimodal representation learning and reinforcement-learning
+  post-training around a joint action-wrench proposal, and is trained on
+  ManuFacet-1K, a 1,000-hour force-synchronized manipulation corpus.
+authors:
+  - family-names: Deng
+    given-names: Haoyuan
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Liu
+    given-names: Haichao
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Guo
+    given-names: Wenkai
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Ling
+    given-names: Yuan
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Yang
+    given-names: Zaijia
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Xue
+    given-names: Yuanjiang
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Sun
+    given-names: Haosheng
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Wang
+    given-names: Liangzi
+    affiliation: "PINE Lab, Nanyang Technological University"
+  - family-names: Wang
+    given-names: Ziwei
+    affiliation: "PINE Lab, Nanyang Technological University"
+    email: ziwei.wang@ntu.edu.sg
+url: "https://pine-lab-ntu.github.io/facet-0/"
+repository-code: "https://github.com/PINE-Lab-NTU/FACET"
+keywords:
+  - robot foundation models
+  - precision assembly
+  - force-aware manipulation
+  - contact-rich control
+  - real-world reinforcement learning
+preferred-citation:
+  type: article
+  title: "Facet-0: A Robotic Foundation Model for Contact-Rich Precise Manipulation"
+  authors:
+    - family-names: Deng
+      given-names: Haoyuan
+    - family-names: Liu
+      given-names: Haichao
+    - family-names: Guo
+      given-names: Wenkai
+    - family-names: Ling
+      given-names: Yuan
+    - family-names: Yang
+      given-names: Zaijia
+    - family-names: Xue
+      given-names: Yuanjiang
+    - family-names: Sun
+      given-names: Haosheng
+    - family-names: Wang
+      given-names: Liangzi
+    - family-names: Wang
+      given-names: Ziwei
+  journal: "arXiv preprint arXiv:2609.01596"
+  year: 2026
+  identifiers:
+    - type: other
+      value: "arXiv:2609.01596"
+      description: The arXiv preprint
+  url: "https://arxiv.org/abs/2609.01596"
