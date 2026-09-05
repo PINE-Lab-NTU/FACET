@@ -12,7 +12,7 @@
 [Haoyuan Deng](https://denghaoyuan123.github.io/)\*,
 [Haichao Liu](https://henryhcliu.github.io/)\*,
 [Wenkai Guo](https://wkguo.github.io/)\*,
-Yuan Ling,
+[Yuan Ling](https://u-li-li.github.io/lingyuan.github.io/),
 [Zaijia Yang](https://yangzaijia.github.io/),
 [Yuanjiang Xue](https://xuanyuan-jiang.github.io/),
 Haosheng Sun,
