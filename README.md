@@ -14,7 +14,7 @@
 [Wenkai Guo](https://wkguo.github.io/)\*,
 Yuan Ling,
 [Zaijia Yang](https://yangzaijia.github.io/),
-Yuanjiang Xue,
+[Yuanjiang Xue](https://xuanyuan-jiang.github.io/),
 Haosheng Sun,
 Liangzi Wang,
 [Ziwei Wang](https://ziweiwangthu.github.io/)†
