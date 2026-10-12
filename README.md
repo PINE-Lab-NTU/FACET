@@ -25,7 +25,11 @@ Liangzi Wang,
 
 ---
 
-## 🚧 Code coming soon
+## Code
+
+The post-training code (value-guided policy refinement) is on the
+[`post-training`](https://github.com/PINE-Lab-NTU/FACET/tree/post-training) branch.
+
 
 ---
 
