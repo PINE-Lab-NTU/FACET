@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "facet0-post-training"
+version = "0.1.0"
+description = "Facet-0 value-guided policy refinement on deployment rollouts"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = ["numpy", "pandas", "pyarrow"]
+
+[project.optional-dependencies]
+# Policy refinement and serving run on openpi (JAX); install openpi from its repository.
+policy = ["tyro", "wandb", "lerobot>=0.3"]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["facet0*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
