@@ -1,4 +1,4 @@
-"""Interaction reward (Eq. 4) and discounted returns."""
+"""Reward."""
 
 from __future__ import annotations
 
@@ -21,8 +21,20 @@ class RewardConfig:
     gamma: float = 0.99
     alpha: float = 0.0
     beta: float = 0.0
-    time_budget: float | None = None  # T_max in frames; None disables the speed term
-    envelopes: dict[str, tuple[float, ...]] | None = None  # phase -> 6 per-axis limits; key "*" = any phase
+    time_budget: float | None = None
+    envelopes: dict[str, tuple[float, ...]] | None = None
+    sparse: bool = False
+
+    def validate(self):
+        if not 0 < self.gamma <= 1 or self.alpha < 0 or self.beta < 0:
+            raise ValueError("invalid reward coefficients")
+        if not self.sparse and (not self.envelopes or self.alpha <= 0 or self.time_budget is None):
+            raise ValueError("interaction rewards require envelopes, alpha > 0 and a time budget")
+        if self.beta > 0 and (self.time_budget is None or self.time_budget <= 0):
+            raise ValueError("speed bonus requires a positive time budget")
+        for values in (self.envelopes or {}).values():
+            if len(values) != 6 or not np.isfinite(values).all() or min(values) <= 0:
+                raise ValueError("wrench envelopes must contain six positive finite values")
 
 
 def interaction_reward(
@@ -32,7 +44,7 @@ def interaction_reward(
     envelope: np.ndarray | None,
     cfg: RewardConfig,
 ) -> np.ndarray:
-    """Eq. (4) for one episode. ``envelope`` is [T, 6] per-frame limits or None."""
+
     r = complete.astype(np.float64)
     if cfg.beta > 0 and cfg.time_budget:
         r = r * (1.0 + cfg.beta * np.maximum(1.0 - elapsed / cfg.time_budget, 0.0))
@@ -54,11 +66,16 @@ def _episode_reward(df: pd.DataFrame, cfg: RewardConfig) -> np.ndarray:
     n = len(df)
     states = np.stack([np.asarray(s, np.float32).reshape(-1) for s in df["observation.state"]])
     wrench = states[:, conventions.WRENCH_SLICE]
-    if all(c in df.columns for c in JUDGE_COLUMNS):
+    present = [c in df.columns for c in JUDGE_COLUMNS]
+    if any(present) and not all(present):
+        raise ValueError("incomplete judge columns")
+    if all(present):
         subgoal = df["subgoal_index"].to_numpy()
         complete = df["subgoal_complete"].to_numpy().astype(bool)
         phase = [str(p) for p in df["phase"]]
-    else:  # outcome only: one sub-goal completed on the last frame of a successful rollout
+    else:
+        if not cfg.sparse:
+            raise ValueError("judge columns required; use sparse mode for outcome-only data")
         subgoal = np.zeros(n, dtype=np.int64)
         complete = np.zeros(n, dtype=bool)
         complete[-1] = bool(np.asarray(df["is_success"].iloc[-1]).reshape(-1)[0])
@@ -69,12 +86,14 @@ def _episode_reward(df: pd.DataFrame, cfg: RewardConfig) -> np.ndarray:
     if cfg.envelopes:
         default = cfg.envelopes.get("*")
         rows = [cfg.envelopes.get(p, default) for p in phase] if phase else [default] * n
-        if all(r is not None for r in rows):
-            envelope = np.asarray(rows, dtype=np.float64)
+        if any(r is None for r in rows):
+            raise ValueError("missing phase wrench envelope")
+        envelope = np.asarray(rows, dtype=np.float64)
     return interaction_reward(complete, elapsed.astype(np.float64), wrench, envelope, cfg)
 
 
 def compute_returns(root: Path, cfg: RewardConfig) -> pd.DataFrame:
+    cfg.validate()
     parts = []
     for f in lerobot.data_files(root):
         names = set(pq.ParquetFile(f).schema_arrow.names)
@@ -114,9 +133,10 @@ def main() -> None:
     ap.add_argument("--beta", type=float, default=RewardConfig.beta)
     ap.add_argument("--time-budget", type=float, default=None, help="T_max in frames")
     ap.add_argument("--envelopes", type=Path, default=None, help='JSON {phase: [6 limits], "*": [...]}')
+    ap.add_argument("--sparse", action="store_true")
     args = ap.parse_args()
     envelopes = {k: tuple(v) for k, v in json.loads(args.envelopes.read_text()).items()} if args.envelopes else None
-    cfg = RewardConfig(args.gamma, args.alpha, args.beta, args.time_budget, envelopes)
+    cfg = RewardConfig(args.gamma, args.alpha, args.beta, args.time_budget, envelopes, args.sparse)
     print(f"wrote {write_returns(args.dataset, args.tag, cfg)}")
 
 

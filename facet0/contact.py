@@ -1,4 +1,4 @@
-"""Contact intensity c_t and contact regime rho_t from causally smoothed wrench changes (App. D.2)."""
+"""Contact."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from facet0.data import lerobot
 
 @dataclasses.dataclass(frozen=True)
 class ContactSpec:
-    filter_window: int = 5  # causal moving-average window (frames)
-    lag: int = 8  # d_t compares w_bar_t with w_bar_{t-lag}
+    filter_window: int = 5
+    lag: int = 8
     episode_quantile: float = 0.8
     corpus_quantile: float = 0.5
-    regime_threshold: float = 1.0  # rho_t = contact iff c_t >= threshold
+    regime_threshold: float = 1.0
 
 
 def causal_filter(x: np.ndarray, window: int) -> np.ndarray:
-    """Causal moving average over the first axis: no frame looks ahead."""
+
     if window <= 1:
         return x
     csum = np.cumsum(x, axis=0)
@@ -32,7 +32,7 @@ def causal_filter(x: np.ndarray, window: int) -> np.ndarray:
 
 
 def wrench_change(wrench: np.ndarray, spec: ContactSpec) -> np.ndarray:
-    """d_t = ||w_bar_t - w_bar_{t-lag}||, with the lag clamped at the episode start."""
+
     w_bar = causal_filter(np.asarray(wrench, dtype=np.float32), spec.filter_window)
     prev = np.maximum(np.arange(len(w_bar)) - spec.lag, 0)
     return np.linalg.norm(w_bar - w_bar[prev], axis=-1)
@@ -40,10 +40,10 @@ def wrench_change(wrench: np.ndarray, spec: ContactSpec) -> np.ndarray:
 
 @dataclasses.dataclass(frozen=True)
 class EpisodeContact:
-    change: np.ndarray  # d_t
-    scale: float  # kappa_e
-    intensity: np.ndarray  # c_t in [0, 1]
-    regime: np.ndarray  # rho_t == contact
+    change: np.ndarray
+    scale: float
+    intensity: np.ndarray
+    regime: np.ndarray
 
 
 def episode_contact(states_by_episode: dict[int, np.ndarray], spec: ContactSpec) -> dict[int, EpisodeContact]:

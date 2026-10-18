@@ -21,6 +21,7 @@ from facet0 import conventions
 from facet0.model import Facet0Config, Facet0Model
 from facet0.policy import checkpoint, guidance
 from facet0.policy.transforms import Facet0DataConfig
+from facet0.contracts import read_manifest, model_metadata
 
 
 def model_config(**kwargs) -> Facet0Config:
@@ -28,12 +29,12 @@ def model_config(**kwargs) -> Facet0Config:
 
 
 def data_config_factory(**kwargs) -> Facet0DataConfig:
-    return Facet0DataConfig(base_config=_config.DataConfig(prompt_from_task=True, action_sequence_keys=["action"]), **kwargs)
+    return Facet0DataConfig(
+        base_config=_config.DataConfig(prompt_from_task=True, action_sequence_keys=["action"]), **kwargs
+    )
 
 
 class WrenchHistory:
-    """Ring buffer of the latest K measured wrenches, clamped to the first reading."""
-
     def __init__(self, window: int = conventions.WRENCH_WINDOW):
         self._buf: deque[np.ndarray] = deque(maxlen=window)
 
@@ -60,8 +61,10 @@ class Facet0Policy(_base_policy.BasePolicy):
         default_prompt: str | None = None,
         num_steps: int = 10,
         seed: int = 0,
+        config: Facet0Config | None = None,
+        tokenizer_path: str | None = None,
     ):
-        data_config = data_config_factory().create(pathlib.Path("assets"), model_config())
+        data_config = data_config_factory(tokenizer_path=tokenizer_path).create(pathlib.Path("assets"), config or model_config())
         use_quantiles = data_config.use_quantile_norm
         self._inputs = _transforms.compose(
             [
@@ -82,8 +85,14 @@ class Facet0Policy(_base_policy.BasePolicy):
 
         def sample(state, rng, observation, guided, guided_mask, noise, scale):
             return guidance.sample_with_guidance(
-                nnx.merge(graphdef, state), rng, observation, guided, guided_mask,
-                num_steps=num_steps, guidance_scale=scale, noise=noise,
+                nnx.merge(graphdef, state),
+                rng,
+                observation,
+                guided,
+                guided_mask,
+                num_steps=num_steps,
+                guidance_scale=scale,
+                noise=noise,
             )[0]
 
         self._sample = functools.partial(jax.jit(sample), state)
@@ -91,6 +100,15 @@ class Facet0Policy(_base_policy.BasePolicy):
         self._guidance_scale = guidance_scale
         self.action_horizon = model.action_horizon
         self.action_dim = model.action_dim
+        self._features = nnx.jit(model.extract_contact_features)
+
+    def contact_features(self, obs):
+        inputs = self._inputs(dict(obs))
+        inputs.pop("guided_prompt")
+        inputs.pop("guided_prompt_mask")
+        batch = jax.tree.map(lambda x: jnp.asarray(x)[None], inputs)
+        tokens, mask = self._features(_model.Observation.from_dict(batch))
+        return np.asarray(tokens[0], np.float32), np.asarray(mask[0], bool)
 
     def infer(self, obs: dict, noise: np.ndarray | None = None) -> dict:  # type: ignore[override]
         if "observation/wrench_history" not in obs:
@@ -118,9 +136,16 @@ class Facet0Policy(_base_policy.BasePolicy):
 def load(
     model_dir: str | pathlib.Path, guidance_scale: float = 1.0, config: Facet0Config | None = None, **kwargs
 ) -> Facet0Policy:
-    """Build the policy from a directory holding ``params/`` and ``assets/norm_stats.json``."""
+
     model_dir = pathlib.Path(model_dir)
     logging.info("Loading Facet-0 policy from %s", model_dir)
-    config = config or model_config()
+    manifest = read_manifest(model_dir)
+    if config is not None and model_metadata(config) != manifest["model"]:
+        raise ValueError("requested model differs from checkpoint")
+    config = config or model_config(**manifest["model"])
     model = config.load(checkpoint.restore_params(model_dir / "params", dtype=jnp.bfloat16))
-    return Facet0Policy(model, checkpoint.load_norm_stats(model_dir / "assets"), guidance_scale=guidance_scale, **kwargs)
+    return Facet0Policy(
+        model, checkpoint.load_norm_stats(model_dir / "assets"), guidance_scale=guidance_scale, config=config,
+        tokenizer_path=str(model_dir / "assets/policy_tokenizer.model") if manifest.get("tokenizer_sha256") else None,
+        **kwargs
+    )

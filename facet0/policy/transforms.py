@@ -67,8 +67,6 @@ class Facet0Inputs(_transforms.DataTransformFn):
 
 @dataclasses.dataclass(frozen=True)
 class Facet0Outputs(_transforms.DataTransformFn):
-    """Split the un-normalized proposal into the executable A and the anticipated W^."""
-
     def __call__(self, data: dict) -> dict:
         y = np.asarray(data["actions"])
         return {
@@ -79,7 +77,8 @@ class Facet0Outputs(_transforms.DataTransformFn):
 
 @dataclasses.dataclass(frozen=True)
 class Facet0DataConfig(_config.DataConfigFactory):
-    training: bool = False  # repack credit labels as well
+    training: bool = False
+    tokenizer_path: str | None = None
 
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> _config.DataConfig:
@@ -88,9 +87,23 @@ class Facet0DataConfig(_config.DataConfigFactory):
             inputs=[_transforms.DeltaActions(delta_mask)], outputs=[_transforms.AbsoluteActions(delta_mask)]
         )
         repack = TRAINING_REPACK if self.training else REPACK
+        if self.tokenizer_path:
+            import sentencepiece
+            from openpi.models.tokenizer import PaligemmaTokenizer
+
+            tokenizer = PaligemmaTokenizer.__new__(PaligemmaTokenizer)
+            tokenizer._max_len = model_config.max_token_len
+            tokenizer._tokenizer = sentencepiece.SentencePieceProcessor(model_file=self.tokenizer_path)
+            model_transforms = _transforms.Group(inputs=[
+                _transforms.InjectDefaultPrompt(None), _transforms.ResizeImages(224, 224),
+                _transforms.TokenizePrompt(tokenizer, discrete_state_input=False),
+                _transforms.PadStatesAndActions(model_config.action_dim),
+            ])
+        else:
+            model_transforms = _config.ModelTransformFactory()(model_config)
         return dataclasses.replace(
             self.create_base_config(assets_dirs, model_config),
             repack_transforms=_transforms.Group(inputs=[_transforms.RepackTransform(repack)]),
             data_transforms=data_transforms,
-            model_transforms=_config.ModelTransformFactory()(model_config),
+            model_transforms=model_transforms,
         )

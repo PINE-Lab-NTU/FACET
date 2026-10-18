@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# V_psi for every frame, then contact-selective credit (Eq. 6) and labels b_t.
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 $PY -m facet0.refinement.critic score --critic "${CRITIC:?}" --corpus "$DATASET:$FEATURES:$RETURNS_TAG" \

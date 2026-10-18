@@ -1,12 +1,14 @@
-"""Refinement trainer for pi_ref (Alg. 2, line 8)."""
+"""Refinement trainer for pi_ref (Alg. 2, line 10; Eq. 7)."""
 
 from __future__ import annotations
 
 import dataclasses
 import functools
 import logging
+import os
 import pathlib
 import platform
+import shutil
 from typing import Any
 
 import etils.epath as epath
@@ -15,6 +17,7 @@ import flax.traverse_util as traverse_util
 import jax
 import jax.numpy as jnp
 import optax
+import numpy as np
 import orbax.checkpoint as ocp
 import tqdm_loggable.auto as tqdm
 import tyro
@@ -28,27 +31,25 @@ from openpi.training import optimizer as _optimizer
 from openpi.training import sharding
 from openpi.training import utils as training_utils
 
-from facet0.data import norm_stats as _norm_stats
 from facet0.policy import checkpoint as _ckpt
 from facet0.policy import policy as _policy
 from facet0.refinement import data as _data
 from facet0.refinement import objective as _objective
+from facet0.contracts import read_manifest, file_digest, identity, write_manifest
 
 
 @dataclasses.dataclass
 class Args:
-    dataset: pathlib.Path  # RL-ready corpus with meta/credit_{tag}.parquet
+    dataset: pathlib.Path
     credit_tag: str
-    base_params: str  # params/ of pi_align or of the previous refinement round
+    base_params: str
     exp_name: str
-    norm_stats: pathlib.Path | None = None  # default: <dataset>/facet0
-    checkpoint_base_dir: str = "./checkpoints"  # use a fast local disk: a checkpoint is tens of GB
+    norm_stats: pathlib.Path | None = None
+    checkpoint_base_dir: str = "./checkpoints"
     project_name: str = "facet0_refinement"
 
-    contact_weight: float = 1.0  # lambda in Eq. (7)
-    wrench_weight: float = 0.1  # lambda_pre in Eq. (3)
-    paligemma_variant: str = "gemma_2b"
-    action_expert_variant: str = "gemma_300m"
+    contact_weight: float = 1.0
+    wrench_weight: float = 0.1
 
     batch_size: int = 32
     num_train_steps: int = 30_000
@@ -63,13 +64,15 @@ class Args:
     keep_period: int = 5_000
     resume: bool = False
     overwrite: bool = False
-    wandb_enabled: bool = True
+    wandb_enabled: bool = False
+    round_manifest: pathlib.Path | None = None
 
 
 def build_config(args: Args):
-    model_config = _policy.model_config(
-        paligemma_variant=args.paligemma_variant, action_expert_variant=args.action_expert_variant
-    )
+    parent = pathlib.Path(args.base_params).parent
+    manifest = read_manifest(parent)
+    model_config = _policy.model_config(**manifest["model"])
+    tokenizer = parent / "assets/policy_tokenizer.model"
     config = _config.TrainConfig(
         name="facet0_refine",
         project_name=args.project_name,
@@ -82,7 +85,9 @@ def build_config(args: Args):
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         ema_decay=args.ema_decay,
         freeze_filter=model_config.vl_backbone_filter(),
-        data=_policy.data_config_factory(repo_id=str(args.dataset), training=True),
+        data=_policy.data_config_factory(
+            repo_id=str(args.dataset), training=True, tokenizer_path=str(tokenizer) if tokenizer.exists() else None,
+        ),
         checkpoint_base_dir=args.checkpoint_base_dir,
         seed=args.seed,
         batch_size=args.batch_size,
@@ -100,7 +105,6 @@ def build_config(args: Args):
     return config, credit_path, _objective.RefinementObjective(args.contact_weight, args.wrench_weight)
 
 
-# init_logging, init_wandb and init_train_state follow openpi scripts/train.py (Apache-2.0).
 def init_logging() -> None:
     level = {"DEBUG": "D", "INFO": "I", "WARNING": "W", "ERROR": "E", "CRITICAL": "C"}
 
@@ -111,7 +115,9 @@ def init_logging() -> None:
 
     logging.basicConfig(level=logging.INFO, force=True)
     logging.getLogger().handlers[0].setFormatter(
-        Formatter("%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)", "%H:%M:%S")
+        Formatter(
+            "%(asctime)s.%(msecs)03d [%(levelname)s] %(message)-80s (%(process)d:%(filename)s:%(lineno)s)", "%H:%M:%S"
+        )
     )
 
 
@@ -155,6 +161,13 @@ def init_train_state(config: _config.TrainConfig, init_rng: at.KeyArrayLike, mes
         return shape, state_sharding
     params_shape = shape.params.to_pure_dict()
     loaded = config.weight_loader.load(params_shape)
+    loaded = jax.tree.map(
+        lambda value, expected: (
+            np.asarray(value, dtype=expected.dtype) if not isinstance(value, jax.ShapeDtypeStruct) else value
+        ),
+        loaded,
+        params_shape,
+    )
     at.check_pytree_equality(expected=params_shape, got=loaded, check_shapes=True, check_dtypes=True)
     partial = traverse_util.unflatten_dict(
         {k: v for k, v in traverse_util.flatten_dict(loaded).items() if not isinstance(v, jax.ShapeDtypeStruct)}
@@ -165,11 +178,7 @@ def init_train_state(config: _config.TrainConfig, init_rng: at.KeyArrayLike, mes
 
 
 def checkpoint_manager(config: _config.TrainConfig) -> tuple[ocp.CheckpointManager, bool]:
-    """openpi's checkpoint directory handling, but with synchronous saves.
 
-    Asynchronous orbax saves rely on the main thread servicing signal callbacks; a
-    saturated training loop can starve them and leave a params-less tmp directory.
-    """
     ckpt_dir = epath.Path(config.checkpoint_dir).resolve()
     resuming = False
     if ckpt_dir.exists():
@@ -196,7 +205,10 @@ def checkpoint_manager(config: _config.TrainConfig) -> tuple[ocp.CheckpointManag
     return mngr, resuming
 
 
-def save(mngr: ocp.CheckpointManager, state: training_utils.TrainState, norm_stats, step: int) -> None:
+def save(
+    mngr: ocp.CheckpointManager, state: training_utils.TrainState, norm_stats, step: int, model_config, parent,
+    tokenizer_path=None,
+) -> None:
     with at.disable_typechecking():
         train_state, params = _checkpoints._split_params(state)  # noqa: SLF001
     items = {
@@ -205,6 +217,10 @@ def save(mngr: ocp.CheckpointManager, state: training_utils.TrainState, norm_sta
         "params": {"params": params},
     }
     mngr.save(step, items)
+    mngr.wait_until_finished()
+    if tokenizer_path:
+        shutil.copy2(tokenizer_path, pathlib.Path(mngr.directory) / str(step) / "assets/policy_tokenizer.model")
+    write_manifest(pathlib.Path(mngr.directory) / str(step), model_config, stage="post_training", parent=parent)
 
 
 def train_step(config, objective, rng, state: training_utils.TrainState, batch):
@@ -241,11 +257,18 @@ def main(args: Args) -> None:
     config, credit_path, objective = build_config(args)
     if config.batch_size % jax.device_count() != 0:
         raise ValueError(f"batch size {config.batch_size} must be divisible by {jax.device_count()} devices")
-    stats_dir = args.norm_stats or _norm_stats.stats_dir(args.dataset)
-    norm_stats = _ckpt.load_norm_stats(stats_dir)  # raises if missing: never train unnormalized
+    import json
+
+    parent_manifest = read_manifest(pathlib.Path(args.base_params).parent)
+    stats_dir = args.norm_stats or pathlib.Path(args.base_params).parent / "assets"
+    if file_digest(stats_dir / "norm_stats.json") != parent_manifest["norm_sha256"]:
+        raise ValueError("post-training normalization must match the parent policy")
+    norm_stats = _ckpt.load_norm_stats(stats_dir)
     logging.info("Loaded norm stats from %s", stats_dir / "norm_stats.json")
 
-    jax.config.update("jax_compilation_cache_dir", str(epath.Path("~/.cache/jax").expanduser()))
+    jax.config.update("jax_compilation_cache_dir", os.environ.get(
+        "JAX_COMPILATION_CACHE_DIR", str(pathlib.Path(args.checkpoint_base_dir).resolve() / ".jax_cache")
+    ))
     train_rng, init_rng = jax.random.split(jax.random.key(config.seed))
     mesh = sharding.make_mesh(config.fsdp_devices)
     data_sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec(sharding.DATA_AXIS))
@@ -254,7 +277,10 @@ def main(args: Args) -> None:
     mngr, resuming = checkpoint_manager(config)
     init_wandb(config, {"credit": str(credit_path), "objective": dataclasses.asdict(objective)}, resuming=resuming)
 
-    loader = _data.create_data_loader(config, credit_path, norm_stats, sharding=data_sharding, shuffle=True)
+    corpora = json.loads(args.round_manifest.read_text())["corpora"] if args.round_manifest else None
+    loader = _data.create_data_loader(
+        config, credit_path, norm_stats, sharding=data_sharding, shuffle=True, corpora=corpora
+    )
     batches = iter(loader)
     batch = next(batches)
     logging.info("Batch:\n%s", training_utils.array_tree_to_info(batch))
@@ -271,20 +297,28 @@ def main(args: Args) -> None:
         donate_argnums=(1,),
     )
     start = int(state.step)
-    pbar = tqdm.tqdm(range(start, config.num_train_steps), initial=start, total=config.num_train_steps, dynamic_ncols=True)
+    pbar = tqdm.tqdm(
+        range(start, config.num_train_steps), initial=start, total=config.num_train_steps, dynamic_ncols=True
+    )
     infos = []
     for step in pbar:
         with sharding.set_mesh(mesh):
             state, info = step_fn(train_rng, state, batch)
         infos.append(info)
-        if step % config.log_interval == 0:
+        if step % config.log_interval == 0 or step + 1 == config.num_train_steps:
             reduced = jax.device_get(jax.tree.map(jnp.mean, common_utils.stack_forest(infos)))
+            record = {"step": step + 1, **{key: float(value) for key, value in reduced.items()}}
+            if not all(np.isfinite(value) for value in record.values()):
+                raise FloatingPointError("nonfinite refinement optimization metrics")
+            with (pathlib.Path(config.checkpoint_dir) / "metrics.jsonl").open("a") as stream:
+                stream.write(json.dumps(record, allow_nan=False) + "\n")
             pbar.write(f"Step {step}: " + ", ".join(f"{k}={v:.4f}" for k, v in reduced.items()))
             wandb.log(reduced, step=step)
             infos = []
         batch = next(batches)
-        if (step % config.save_interval == 0 and step > start) or step == config.num_train_steps - 1:
-            save(mngr, state, norm_stats, step)
+        completed = step + 1
+        if completed % config.save_interval == 0 or completed == config.num_train_steps:
+            save(mngr, state, norm_stats, completed, config.model, identity(parent_manifest), config.data.tokenizer_path)
     mngr.wait_until_finished()
 
 

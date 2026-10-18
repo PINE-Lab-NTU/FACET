@@ -5,12 +5,14 @@ from __future__ import annotations
 import dataclasses
 
 import flax.nnx as nnx
+import flax.nnx.bridge as nnx_bridge
 import jax
 import jax.numpy as jnp
 import openpi.models.model as _model
 import openpi.models.pi0 as _pi0
 import openpi.models.pi0_config as _pi0_config
 from openpi.models import gemma as _gemma
+from openpi.models import siglip as _siglip
 from openpi.shared import array_typing as at
 from openpi.shared import nnx_utils
 from typing_extensions import override
@@ -25,6 +27,7 @@ class Facet0Config(_pi0_config.Pi0Config):
     action_dim: int = conventions.PROPOSAL_DIM
     action_horizon: int = conventions.ACTION_HORIZON
     wrench_window: int = conventions.WRENCH_WINDOW
+    vision_variant: str = "So400m/14"
 
     @property
     def state_dim(self) -> int:
@@ -42,7 +45,7 @@ class Facet0Config(_pi0_config.Pi0Config):
         return obs, actions
 
     def vl_backbone_filter(self) -> nnx.filterlib.Filter:
-        """Parameters of the vision-language backbone (SigLIP and the PaliGemma LLM expert)."""
+
         return nnx.Any(
             nnx_utils.PathRegex("PaliGemma/img/.*"),
             nnx.All(nnx_utils.PathRegex("PaliGemma/llm/.*"), nnx.Not(nnx_utils.PathRegex(".*llm.*_1.*"))),
@@ -51,15 +54,36 @@ class Facet0Config(_pi0_config.Pi0Config):
 
 class Facet0Model(_pi0.Pi0):
     def __init__(self, config: Facet0Config, rngs: nnx.Rngs):
-        super().__init__(config, rngs)
+        if config.vision_variant == "So400m/14":
+            super().__init__(config, rngs)
+        else:
+            # A real, smaller SigLIP makes all-parameter CPU training reproducible.
+            if not config.pi05:
+                raise ValueError("custom vision variants require pi05")
+            _model.BaseModel.__init__(self, config.action_dim, config.action_horizon, config.max_token_len)
+            self.pi05 = config.pi05
+            vl = _gemma.get_config(config.paligemma_variant)
+            expert = _gemma.get_config(config.action_expert_variant)
+            llm = nnx_bridge.ToNNX(_gemma.Module(configs=[vl, expert], embed_dtype=config.dtype, adarms=True))
+            llm.lazy_init(rngs=rngs, method="init", use_adarms=[False, True])
+            img = nnx_bridge.ToNNX(_siglip.Module(
+                num_classes=vl.width, variant=config.vision_variant, pool_type="none", scan=True, dtype_mm=config.dtype,
+            ))
+            img.lazy_init(next(iter(config.fake_obs().images.values())), train=False, rngs=rngs)
+            self.PaliGemma = nnx.Dict(llm=llm, img=img)
+            self.action_in_proj = nnx.Linear(config.action_dim, expert.width, rngs=rngs)
+            self.action_out_proj = nnx.Linear(expert.width, config.action_dim, rngs=rngs)
+            self.time_mlp_in = nnx.Linear(expert.width, expert.width, rngs=rngs)
+            self.time_mlp_out = nnx.Linear(expert.width, expert.width, rngs=rngs)
+            self.deterministic = True
         width = _gemma.get_config(config.action_expert_variant).width
         self.wrench_window = config.wrench_window
-        self.state_encoder = nnx.Linear(conventions.KIN_DIM, width, rngs=rngs)  # E_s
-        self.wrench_encoder_in = nnx.Linear(config.wrench_window * conventions.WRENCH_DIM, width, rngs=rngs)  # E_w
+        self.state_encoder = nnx.Linear(conventions.KIN_DIM, width, rngs=rngs)
+        self.wrench_encoder_in = nnx.Linear(config.wrench_window * conventions.WRENCH_DIM, width, rngs=rngs)
         self.wrench_encoder_out = nnx.Linear(width, width, rngs=rngs)
 
     def contact_tokens(self, state: jax.Array) -> jax.Array:
-        """[E_s(s^kin); E_w(W)] as two expert tokens: [b, 2, width]."""
+
         kin = state[:, : conventions.KIN_DIM]
         window = state[:, conventions.KIN_DIM : conventions.KIN_DIM + self.wrench_window * conventions.WRENCH_DIM]
         s_token = self.state_encoder(kin)
@@ -72,18 +96,31 @@ class Facet0Model(_pi0.Pi0):
         contact = self.contact_tokens(obs.state).astype(tokens.dtype)
         tokens = jnp.concatenate([contact, tokens], axis=1)
         input_mask = jnp.concatenate([jnp.ones(contact.shape[:2], dtype=jnp.bool_), input_mask], axis=1)
-        # [E_s, E_w] form one block after the prefix; the chunk forms the next block.
+
         ar_mask = jnp.concatenate([jnp.array([True, False]), ar_mask])
         return tokens, input_mask, ar_mask, adarms_cond
+
+    def extract_contact_features(self, observation):
+        observation = _model.preprocess_observation(None, observation, train=False)
+        b = observation.state.shape[0]
+        prefix, pm, pa = self.embed_prefix(observation)
+        suffix, sm, sa, cond = self.embed_suffix(
+            observation, jnp.zeros((b, self.action_horizon, self.action_dim)), jnp.ones(b)
+        )
+        mask = jnp.concatenate([pm, sm], axis=1)
+        (_, out), _ = self.PaliGemma.llm(
+            [prefix, suffix],
+            mask=_pi0.make_attn_mask(mask, jnp.concatenate([pa, sa])),
+            positions=jnp.cumsum(mask, axis=1) - 1,
+            adarms_cond=[None, cond],
+        )
+        return out[:, :2], jnp.ones((b, 2), dtype=bool)
 
 
 def flow_matching_errors(
     model: Facet0Model, rng: jax.Array, observation: _model.Observation, target: jax.Array, *, train: bool = True
 ) -> jax.Array:
-    """Per-element squared velocity error ||v_theta(X^tau, tau | h^c) - U^tau||^2: [b, H, 13].
 
-    X^tau = (1 - tau) Y + tau eps and U^tau = eps - Y, with tau ~ Beta(1.5, 1).
-    """
     preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
     observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
     noise = jax.random.normal(noise_rng, target.shape)

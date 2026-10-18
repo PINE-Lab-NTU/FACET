@@ -4,4 +4,4 @@ from facet0 import compat as _compat
 
 _compat.install_lerobot_common_redirect()
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

@@ -1,4 +1,4 @@
-"""Action-wrench flow-matching loss (Eq. 3) and contact-weighted refinement loss (Eq. 7)."""
+"""Compute policy training objectives."""
 
 from __future__ import annotations
 
@@ -8,25 +8,19 @@ import jax
 import jax.numpy as jnp
 import openpi.models.model as _model
 
-from facet0 import conventions
 from facet0.model import flow_matching_errors
+from facet0.losses import per_sample_loss
 
 
 @dataclasses.dataclass(frozen=True)
 class RefinementObjective:
-    contact_weight: float = 1.0  # lambda in Eq. (7)
-    wrench_weight: float = 0.1  # lambda_pre in Eq. (3)
+    contact_weight: float = 1.0
+    wrench_weight: float = 0.1
 
 
 def action_wrench_loss(errors: jax.Array, action_valid: jax.Array, wrench_valid: jax.Array, wrench_weight: float):
-    """Eq. (3) per sample from per-element errors [b, H, 13]; returns (L_FM, action term, wrench term)."""
-    m_a = action_valid.astype(jnp.float32)
-    m_w = wrench_valid.astype(jnp.float32)
-    e_a = errors[..., conventions.PROPOSAL_ACTION_COLUMNS].sum(-1)
-    e_w = errors[..., conventions.PROPOSAL_WRENCH_COLUMNS].sum(-1)
-    l_a = jnp.sum(m_a * e_a, axis=-1) / jnp.maximum(jnp.sum(m_a, axis=-1), 1.0)
-    l_w = jnp.sum(m_w * e_w, axis=-1) / jnp.maximum(jnp.sum(m_w, axis=-1), 1.0)
-    return l_a + wrench_weight * l_w, l_a, l_w
+
+    return per_sample_loss(errors, action_valid, wrench_valid, wrench_weight)
 
 
 def refinement_loss(
@@ -37,7 +31,7 @@ def refinement_loss(
     info: dict[str, jax.Array],
     objective: RefinementObjective,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
-    """``info`` carries label, contact_intensity, action_valid, wrench_valid and the tagged prompt."""
+
     uncond_rng, cond_rng = jax.random.split(rng)
     label = info["label"].astype(jnp.float32)
     weight = 1.0 + objective.contact_weight * info["contact_intensity"].astype(jnp.float32)

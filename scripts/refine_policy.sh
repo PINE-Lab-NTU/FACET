@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Contact-weighted refinement of pi_ref (Eq. 7, Alg. 2 line 8) with the VL backbone frozen.
-#   PI_REF=<pi_ref>/params CKPT_DIR=/nvme/ckpts bash scripts/refine_policy.sh
 set -euo pipefail
 source "$(dirname "$0")/env.sh"
 XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.95}" \

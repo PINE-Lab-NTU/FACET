@@ -20,7 +20,7 @@ def read_tasks(root: Path) -> dict[int, str]:
 
 
 def episode_indices(root: Path) -> list[int]:
-    """The dataset's real episode indices (they may be sparse after filtering)."""
+
     return sorted(int(r["episode_index"]) for r in read_jsonl(Path(root) / "meta" / "episodes.jsonl"))
 
 
@@ -36,17 +36,13 @@ def _stack(column) -> np.ndarray:
 
 
 def load_frames(root: Path, columns: list[str]) -> pd.DataFrame:
-    """Concatenate the requested scalar columns of every episode, in file order."""
+
     parts = [pd.read_parquet(f, columns=columns) for f in data_files(root)]
     return pd.concat(parts, ignore_index=True)
 
 
 def load_episode_states(root: Path, key: str = "observation.state") -> dict[int, np.ndarray]:
-    """Per-episode state arrays s_{0:T} indexed by frame_index.
 
-    Episodes whose frame indices are not contiguous from zero are placed on a zero-filled
-    frame grid, so ``states[e][frame_index]`` is always the frame's state.
-    """
     out: dict[int, np.ndarray] = {}
     for f in data_files(root):
         df = pd.read_parquet(f, columns=["episode_index", "frame_index", key])
@@ -57,19 +53,17 @@ def load_episode_states(root: Path, key: str = "observation.state") -> dict[int,
             if frames[0] == 0 and np.array_equal(frames, np.arange(len(frames))):
                 out[int(ep)] = states
             else:
-                grid = np.zeros((int(frames.max()) + 1, states.shape[-1]), dtype=np.float32)
-                grid[frames] = states
-                out[int(ep)] = grid
+                raise ValueError(f"episode {ep}: frame indices must be contiguous from zero")
     return out
 
 
 def wrench(states: np.ndarray) -> np.ndarray:
-    """Measured wrench w_t = [f_t; m_t] from the 13-D state of Eq. (1)."""
+
     return np.asarray(states, dtype=np.float32)[:, conventions.WRENCH_SLICE]
 
 
 def episode_success(root: Path) -> dict[int, bool]:
-    """Deployment outcome of each episode, taken from the per-frame ``is_success`` column."""
+
     df = load_frames(root, ["episode_index", "frame_index", "is_success"])
     df = df.sort_values(["episode_index", "frame_index"])
     last = df.groupby("episode_index", sort=True).tail(1)

@@ -15,14 +15,14 @@ from openpi.training import weight_loaders as _weight_loaders
 
 
 def restore_params(params_path: pathlib.Path | str, *, restore_type=jax.Array, dtype=None, sharding=None) -> at.Params:
-    """``openpi.models.model.restore_params`` that also reads orbax >= 0.11 metadata."""
+
     params_path = pathlib.Path(params_path).resolve()
     if restore_type is jax.Array and sharding is None:
         mesh = jax.sharding.Mesh(jax.devices(), ("x",))
         sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec())
     with ocp.PyTreeCheckpointer() as ckptr:
         metadata = ckptr.metadata(params_path)
-        tree = getattr(metadata, "item_metadata", metadata)  # StepMetadata on orbax >= 0.11
+        tree = getattr(metadata, "item_metadata", metadata)
         item = {"params": tree["params"]}
         params = ckptr.restore(
             params_path,
@@ -34,15 +34,13 @@ def restore_params(params_path: pathlib.Path | str, *, restore_type=jax.Array, d
             ),
         )["params"]
     flat = traverse_util.flatten_dict(params)
-    if all(kp[-1] == "value" for kp in flat):  # saved from an nnx.State during training
+    if all(kp[-1] == "value" for kp in flat):
         flat = {kp[:-1]: v for kp, v in flat.items()}
     return traverse_util.unflatten_dict(flat)
 
 
 @dataclasses.dataclass(frozen=True)
 class ParamsLoader(_weight_loaders.WeightLoader):
-    """Initializes post-training from a policy checkpoint's ``params/`` directory."""
-
     params_path: str
 
     def load(self, params: at.Params) -> at.Params:
@@ -51,7 +49,7 @@ class ParamsLoader(_weight_loaders.WeightLoader):
 
 
 def load_norm_stats(directory: pathlib.Path | str) -> dict[str, _normalize.NormStats]:
-    """Read ``<directory>/norm_stats.json`` directly; resolving via ``asset_id`` can pick up another corpus's."""
+
     return _normalize.load(directory)
 
 

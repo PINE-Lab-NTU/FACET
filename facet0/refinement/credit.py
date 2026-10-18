@@ -1,4 +1,4 @@
-"""Contact-selective credit (Eq. 6) and positive-interaction labels b_t."""
+"""Credit."""
 
 from __future__ import annotations
 
@@ -15,13 +15,13 @@ from facet0.data import lerobot
 
 @dataclasses.dataclass(frozen=True)
 class CreditConfig:
-    horizon: int = 20  # N frames (1.3 s at 15 Hz), shorter than the chunk horizon H = 50
-    positive_fraction: float = 0.2  # top fraction within each contact regime
+    horizon: int = 20
+    positive_fraction: float = 0.2
     contact: contact.ContactSpec = contact.ContactSpec()
 
 
 def episode_credit(values: np.ndarray, rewards: np.ndarray, horizon: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """delta^(N), V(h_{t+N}) and the N-step reward sum; past the episode end r = 0 and V = 0."""
+
     t_len = len(values)
     csum = np.r_[0.0, np.cumsum(rewards, dtype=np.float64)]
     ends = np.minimum(np.arange(t_len) + horizon, t_len)
@@ -33,6 +33,8 @@ def episode_credit(values: np.ndarray, rewards: np.ndarray, horizon: int) -> tup
 
 
 def compute_credit(root: Path, scores: pd.DataFrame, returns: pd.DataFrame, cfg: CreditConfig) -> pd.DataFrame:
+    if not 0 < cfg.positive_fraction < 1 or not 0 < cfg.horizon < 50:
+        raise ValueError("credit requires 0 < positive_fraction < 1 and 0 < horizon < 50")
     frames = scores[["episode_index", "frame_index", "value"]].merge(
         returns[["episode_index", "frame_index", "reward"]], on=["episode_index", "frame_index"], how="left"
     )
@@ -50,6 +52,8 @@ def compute_credit(root: Path, scores: pd.DataFrame, returns: pd.DataFrame, cfg:
             group["value"].to_numpy(np.float64), group["reward"].to_numpy(np.float64), cfg.horizon
         )
         c = contact_by_episode[int(ep)]
+        if len(fr) != len(c.intensity):
+            raise ValueError(f"episode {ep}: incomplete feature coverage")
         parts.append(
             pd.DataFrame(
                 {
@@ -70,7 +74,10 @@ def compute_credit(root: Path, scores: pd.DataFrame, returns: pd.DataFrame, cfg:
     for name, regime in (("contact", out["contact_regime"].to_numpy()), ("free", ~out["contact_regime"].to_numpy())):
         if regime.any():
             q = float(np.percentile(out["credit"].to_numpy()[regime], (1 - cfg.positive_fraction) * 100))
-            label |= regime & (out["credit"].to_numpy() >= q)
+            rows = np.flatnonzero(regime)
+            count = max(1, int(np.ceil(len(rows) * cfg.positive_fraction)))
+            order = np.argsort(-out["credit"].to_numpy()[rows], kind="stable")
+            label[rows[order[:count]]] = True
             thresholds[name] = q
     out.insert(3, "label", label)
     out.attrs["thresholds"] = thresholds

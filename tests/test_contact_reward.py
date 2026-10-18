@@ -39,7 +39,7 @@ def test_corpus_floor_raises_scale_of_gentle_episode():
 
 
 def test_outcome_only_reward_has_no_failure_penalty(corpus):
-    table = reward.compute_returns(corpus, reward.RewardConfig(gamma=0.9))
+    table = reward.compute_returns(corpus, reward.RewardConfig(gamma=0.9, sparse=True))
     success = lerobot.episode_success(corpus)
     for ep, g in table.groupby("episode_index"):
         r = g["reward"].to_numpy()
@@ -51,7 +51,7 @@ def test_speed_bonus_and_force_penalty():
     complete = np.array([0, 0, 1, 0, 1], bool)
     elapsed = np.array([1, 2, 3, 1, 2], float)
     wrench = np.zeros((5, 6))
-    wrench[3, 2] = 30.0  # 1.5 x the 20 N envelope on f_z
+    wrench[3, 2] = 30.0
     cfg = reward.RewardConfig(alpha=0.5, beta=1.0, time_budget=4.0)
     r = reward.interaction_reward(complete, elapsed, wrench, np.full((5, 6), 20.0), cfg)
     np.testing.assert_allclose(r, [0, 0, 1 + 0.25, -0.25, 1 + 0.5])
@@ -66,5 +66,5 @@ def test_judge_segmentation_resets_subgoal_time(tmp_path):
     df["subgoal_complete"] = [0, 0, 1, 0, 0, 1]
     df["phase"] = ["align"] * 3 + ["press"] * 3
     df.to_parquet(f, index=False)
-    r = reward.compute_returns(root, reward.RewardConfig(beta=1.0, time_budget=6.0))["reward"].to_numpy()
+    r = reward.compute_returns(root, reward.RewardConfig(beta=1.0, time_budget=6.0, sparse=True))["reward"].to_numpy()
     np.testing.assert_allclose(r, [0, 0, 1 + 0.5, 0, 0, 1 + 0.5])

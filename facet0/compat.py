@@ -42,4 +42,3 @@ def install_lerobot_common_redirect() -> bool:
         return False
     sys.meta_path.insert(0, _Redirect())
     return True
-

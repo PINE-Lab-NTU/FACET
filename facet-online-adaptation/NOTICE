@@ -1,0 +1,11 @@
+Facet online adaptation
+
+This distribution contains curated neural-network, replay-buffer and RL-token
+components from the authors' deployed RLT/OpenPI online adaptation implementation.
+See docs/provenance.json for file hashes and docs/curation.md for the scope of changes.
+
+OpenPI is developed by Physical Intelligence and licensed under Apache-2.0.
+OpenPI and its websocket client are external dependencies, not vendored here.
+UR RTDE, RealSense, SpaceMouse, ROS and Franka controllers are external dependencies
+and retain their respective licenses. This package does not include model weights,
+training datasets, private task calibrations, or experiment artifacts.

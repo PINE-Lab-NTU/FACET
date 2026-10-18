@@ -1,0 +1,30 @@
+{
+  "baseline": "deployed C=1 online adaptation learner, 2026-10-10 revision",
+  "original_files": {
+    "models/actor.py": "cd83dcf8b2ec6ca903acee87876af052e33070c713ff24f12a486c3173ec5fd1",
+    "models/critic.py": "aa82263b626e48daa33f17f0b338a841425dfb93d91188083ed3f0120c04117d",
+    "models/networks.py": "1c503e3d97bc865e8d0368cdea49932dbe5b7263a1d4125457d015d7342433c6",
+    "models/rl_token.py": "2cfda5ec9040bf88f7e5dbc3f769378dd2e8669bd3648a28915fef800668914c",
+    "training/replay_buffer.py": "d4a0cb69554a2cd0a518ebae2aac29256a13deaaa92939a678d838e4aa7671cc",
+    "training/td3_utils.py": "fe8fcc092c63bd07e427929af970425f98d71ddad99d462a50ffa86e28524dc2",
+    "training/robot_online_residual.py": "c70e3cc1ae18ad9b78134915303894bd1c8b3a816da9ceb16b54d69f906f54ef"
+  },
+  "copied_components": {
+    "src/facet_adaptation/replay.py": "training/replay_buffer.py",
+    "src/facet_adaptation/token_model.py": "models/rl_token.py"
+  },
+  "extracted_components": {
+    "src/facet_adaptation/networks.py": [
+      "MLP",
+      "ModalityProjection"
+    ]
+  },
+  "refactored_components": [
+    "deterministic Actor",
+    "TwinQCritic",
+    "C=1 BC/TD3+BC/MC learner",
+    "robot-agnostic runtime"
+  ],
+  "legacy_checkpoint_compatibility": "not automatic; task-space contracts differ",
+  "hardware_revalidation": "required after curation; no success-rate equivalence claimed"
+}

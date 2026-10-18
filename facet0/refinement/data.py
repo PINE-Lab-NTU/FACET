@@ -55,8 +55,19 @@ def create_data_loader(
     *,
     sharding: jax.sharding.Sharding | None = None,
     shuffle: bool = True,
+    corpora: list[dict] | None = None,
 ) -> RefinementDataLoader:
     data_config, dataset = build_dataset(config, credit_path, norm_stats)
+    if corpora:
+        import torch
+
+        datasets = []
+        for corpus in corpora:
+            root = Path(corpus["dataset"])
+            current = dataclasses.replace(config, data=dataclasses.replace(config.data, repo_id=str(root)))
+            _, part = build_dataset(current, root / "meta" / f"credit_{corpus['credit_tag']}.parquet", norm_stats)
+            datasets.append(part)
+        dataset = torch.utils.data.ConcatDataset(datasets)
     loader = _data_loader.TorchDataLoader(
         dataset,
         local_batch_size=config.batch_size // jax.process_count(),

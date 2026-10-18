@@ -15,7 +15,7 @@ from facet0.data import lerobot
 
 
 def lerobot_dataset(root: Path, horizon: int):
-    """LeRobot (>= 0.3) dataset over the real, possibly sparse, episode index set."""
+
     import lerobot.datasets.lerobot_dataset as lerobot_ds
 
     root = Path(root)

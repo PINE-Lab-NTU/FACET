@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "facet-online-adaptation"
+version = "0.2.0"
+description = "Human-in-the-loop online policy adaptation with UR and Franka backends"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = ["numpy>=1.26,<3", "torch>=2.7,<3", "PyYAML>=6"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+ur = ["ur-rtde>=1.6"]
+cameras = ["pyrealsense2>=2.55"]
+teleop = ["pyspacemouse>=1.1"]
+# Install openpi and its client from the matching policy checkout; they are not
+# required for mock tests or robot probes. See docs/policy-server.md.
+
+[project.scripts]
+facet-adapt = "facet_adaptation.cli:main"
+facet-encoder = "facet_adaptation.encoder:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110

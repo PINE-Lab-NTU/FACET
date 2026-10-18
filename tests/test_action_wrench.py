@@ -22,7 +22,7 @@ def test_row_k_pairs_with_the_following_step():
 def test_masks_at_episode_end():
     states = _states(12)
     targets, valid = action_wrench.wrench_targets(action_wrench.filtered_wrench(states), frame=9, horizon=5)
-    np.testing.assert_array_equal(valid, [True, True, False, False, False])  # w_10, w_11 exist
+    np.testing.assert_array_equal(valid, [True, True, False, False, False])
     np.testing.assert_array_equal(action_wrench.action_valid(9, 5, 12), [True, True, True, False, False])
 
 

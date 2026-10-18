@@ -1,4 +1,4 @@
-"""Instruction-tag conditioning on b_t and classifier-free-guidance sampling (App. D.2)."""
+"""Guidance."""
 
 from __future__ import annotations
 
@@ -17,8 +17,6 @@ from facet0 import conventions
 
 @dataclasses.dataclass(frozen=True)
 class TokenizeWithGuidance(_transforms.DataTransformFn):
-    """Drop-in replacement for ``TokenizePrompt`` that also emits the tagged prompt."""
-
     tokenizer: Any
 
     def __call__(self, data: dict) -> dict:
@@ -38,7 +36,7 @@ class TokenizeWithGuidance(_transforms.DataTransformFn):
 
 
 def swap_tokenizer(model_inputs: list[_transforms.DataTransformFn]) -> list[_transforms.DataTransformFn]:
-    """Replace the ``TokenizePrompt`` step of an openpi model-transform stack."""
+
     out, found = [], False
     for t in model_inputs:
         if isinstance(t, _transforms.TokenizePrompt):
@@ -64,14 +62,7 @@ def sample_with_guidance(
     guidance_scale: float = 1.0,
     noise: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array]:
-    """Integrate the guided velocity field from noise (tau = 1) to a proposal (tau = 0).
 
-    ``observation.tokenized_prompt`` is the unconditional branch and ``guided_prompt`` the
-    tagged branch. Returns the normalized proposal Y [b, H, 13] and the semantic-contact
-    representation h^c [b, 2 * width]: the expert's outputs at the E_s and E_w tokens under
-    the untagged instruction at tau = 1. They cannot attend to the chunk, so h^c does not
-    depend on the noise or on the sampled proposal.
-    """
     observation = _model.preprocess_observation(None, observation, train=False)
     guided = dataclasses.replace(observation, tokenized_prompt=guided_prompt, tokenized_prompt_mask=guided_prompt_mask)
     dt = -1.0 / num_steps

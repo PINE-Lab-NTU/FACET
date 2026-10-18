@@ -4,3 +4,10 @@ __pycache__/
 *.egg-info/
 checkpoints/
 wandb/
+.DS_Store
+.venv/
+.ruff_cache/
+build/
+dist/
+runs/
+/data/

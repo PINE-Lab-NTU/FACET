@@ -11,7 +11,7 @@ import pytest
 
 
 def write_corpus(root: Path, episodes: list[dict]) -> Path:
-    """``episodes``: dicts with ``states`` [T, 13], ``success`` bool and optional ``task``."""
+
     (root / "meta").mkdir(parents=True)
     tasks = sorted({e.get("task", 0) for e in episodes})
     (root / "meta" / "tasks.jsonl").write_text(
@@ -40,7 +40,7 @@ def write_corpus(root: Path, episodes: list[dict]) -> Path:
 
 
 def contact_episode(n: int, onset: int, success: bool, seed: int) -> dict:
-    """Free-space motion, then a wrench ramp from ``onset`` on."""
+
     rng = np.random.default_rng(seed)
     states = np.zeros((n, 13), dtype=np.float32)
     states[:, :3] = np.linspace(0, 0.1, n)[:, None]

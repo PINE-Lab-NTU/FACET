@@ -31,11 +31,16 @@ def _concat(parts: list[normalize.NormStats]) -> normalize.NormStats:
 
 
 def compute(
-    root: Path, horizon: int = conventions.ACTION_HORIZON, window: int = conventions.WRENCH_WINDOW
+    root: Path,
+    horizon: int = conventions.ACTION_HORIZON,
+    window: int = conventions.WRENCH_WINDOW,
+    episodes: set[int] | None = None,
 ) -> dict[str, normalize.NormStats]:
     kin, wrench = normalize.RunningStats(), normalize.RunningStats()
     act, fut = normalize.RunningStats(), normalize.RunningStats()
     for f in data_files(root):
+        if episodes is not None and int(f.stem.rsplit("_", 1)[1]) not in episodes:
+            continue
         table = pq.read_table(f, columns=["observation.state", "action"])
         state, action = _rows(table["observation.state"]), _rows(table["action"])
         n = len(state)
@@ -60,9 +65,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Compute <dataset>/facet0/norm_stats.json.")
     ap.add_argument("--dataset", required=True, type=Path)
     ap.add_argument("--out", type=Path, default=None, help="directory for norm_stats.json")
+    ap.add_argument("--split", type=Path, required=True)
     args = ap.parse_args()
     out_dir = args.out or stats_dir(args.dataset)
-    normalize.save(out_dir, compute(args.dataset))
+    from facet0.data.split import load
+
+    episodes = {r["episode_index"] for r in load(args.split)["episodes"] if r["split"] == "train"}
+    normalize.save(out_dir, compute(args.dataset, episodes=episodes))
     print(f"wrote {Path(out_dir) / 'norm_stats.json'}")
 
 

@@ -22,10 +22,10 @@ def test_projection_conserves_mass_and_shifts_support():
     np.testing.assert_allclose(m.sum(-1), 1.0, rtol=1e-6)
     mean_in = jnp.sum(probs * CFG.atoms, -1)
     mean_out = jnp.sum(m * CFG.atoms, -1)
-    np.testing.assert_allclose(mean_out[0], 0.5 * mean_in[0], atol=1e-5)  # r + gamma z, no clipping
+    np.testing.assert_allclose(mean_out[0], 0.5 * mean_in[0], atol=1e-5)
     np.testing.assert_allclose(mean_out[1], 0.3 + 0.5 * mean_in[1], atol=1e-5)
-    np.testing.assert_allclose(m[2], jax.nn.one_hot(0, CFG.num_atoms), atol=1e-6)  # clipped at v_min
-    np.testing.assert_allclose(mean_out[3], 1.0, atol=1e-6)  # terminal: the reward alone
+    np.testing.assert_allclose(m[2], jax.nn.one_hot(0, CFG.num_atoms), atol=1e-6)
+    np.testing.assert_allclose(mean_out[3], 1.0, atol=1e-6)
 
 
 def _synthetic(n_episodes=8, length=20, rep_dim=16, seed=0) -> critic.CriticData:
@@ -42,16 +42,25 @@ def _synthetic(n_episodes=8, length=20, rep_dim=16, seed=0) -> critic.CriticData
     done = (fr == length - 1).astype(np.float32)
     next_index = np.where(done > 0, np.arange(n), np.arange(n) + 1)
     return critic.CriticData(
-        rep=rep, proposal=rng.normal(size=(n, 2, 5, 13)).astype(np.float32), next_index=next_index,
-        reward=reward, done=done, success=success, progress=progress.astype(np.float32),
-        contact=(fr > length // 2).astype(np.float32), regime=fr > length // 2,
-        near_wrench=rng.normal(size=(n, 6)).astype(np.float32), episode=ep, frame=fr,
+        rep=rep,
+        proposal=rng.normal(size=(n, 2, 5, 13)).astype(np.float32),
+        next_index=next_index,
+        reward=reward,
+        done=done,
+        success=success,
+        progress=progress.astype(np.float32),
+        contact=(fr > length // 2).astype(np.float32),
+        regime=fr > length // 2,
+        near_wrench=rng.normal(size=(n, 6)).astype(np.float32),
+        episode=ep,
+        frame=fr,
     )
 
 
 def test_training_fits_values_and_roundtrips(tmp_path):
     data = _synthetic()
     cfg = dataclasses.replace(CFG, gamma=0.99, steps=300, batch_size=64, hidden=64, lr=1e-3)
+    data.behavior = np.array(data.proposal[:, 0], copy=True)
     model, history = critic.train(data, cfg, log_every=100)
     assert history[-1]["td"] < history[0]["td"]
     v = critic.value(model, data, cfg)

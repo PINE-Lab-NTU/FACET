@@ -1,137 +1,69 @@
-# Facet-0 post-training
+<p align="center">
+  <a href="https://pine-lab-ntu.github.io/facet-0/"><img src="docs/assets/facet-header.svg" alt="Facet-0 — a robotic foundation model for contact-rich precise manipulation" width="100%"></a>
+</p>
 
-Value-guided policy refinement for [Facet-0: A Robotic Foundation Model for Contact-Rich
-Precise Manipulation](https://arxiv.org/abs/2609.01596) (Sec. 5.1–5.2, Alg. 2).
+<div align="center">
 
-The policy pairs a PaliGemma vision–language backbone with a flow-matching action expert.
-The kinematic state and a causal wrench history (K = 10) enter only the action expert,
-which generates each H = 50 action chunk together with the wrist wrench it is expected
-to induce. Only the action is executed. Deployment rollouts are segmented into
-sub-goals and rewarded (Eq. 4). An **Action–Wrench Critic** learns the return
-distribution of the policy's joint proposal from the semantic–contact representation
-(Eq. 5). **Contact-selective credit** (Eq. 6) ranks frames within their contact regime
-to label the decisive interactions, and a **contact-weighted flow-matching** update
-(Eq. 7) refines the shared action expert while the vision–language backbone stays
-frozen. At deployment a guidance scale trades between the unconditional and the
-label-conditioned branch.
+**A Robotic Foundation Model for Contact-Rich Precise Manipulation**
 
-## Scope
+[Haoyuan Deng](https://denghaoyuan123.github.io/)<sup>*</sup> · [Haichao Liu](https://henryhcliu.github.io/)<sup>*</sup> · [Wenkai Guo](https://wkguo.github.io/)<sup>*</sup> · [Yuan Ling](https://u-li-li.github.io/lingyuan.github.io/) · [Zaijia Yang](https://yangzaijia.github.io/) · [Yuanjiang Xue](https://xuanyuan-jiang.github.io/) · Haosheng Sun · Liangzi Wang · [Ziwei Wang](https://ziweiwangthu.github.io/)<sup>†</sup>
 
-This repository contains the refinement round: rollout ingestion, interaction reward,
-encoding of rollouts with the current policy, the Action–Wrench Critic, contact
-intensity and credit, the refinement objective and trainer, the Facet-0 policy model
-and its deployment.
+**PINE Lab · Nanyang Technological University, Singapore**<br>
+<sub>* Equal contribution · † Corresponding author</sub>
 
-These parts of Facet-0 were run on separate servers and are not included:
+[Project](https://pine-lab-ntu.github.io/facet-0/) &nbsp; / &nbsp; [Paper](https://arxiv.org/abs/2609.01596) &nbsp; / &nbsp; [Model](https://huggingface.co/Pinelab/Facet-0) &nbsp; / &nbsp; [ManuFacet-1K](https://huggingface.co/datasets/Pinelab/ManuFacet-1K)
 
-* ManuFacet-1K collection and curation (Sec. 3, App. B);
-* semantic–contact alignment, which trains the aligned policy `pi_align` that the first
-  refinement round starts from (Sec. 4, Alg. 1);
-* the VLM judge that segments rollouts into sub-goals and phases for Eq. (4);
-* the 20 Hz refinement expert, 200 Hz compliant controller and safety operator (App. C);
-* the FACET bottleneck encoder and local policy adaptation (Sec. 5.3, Alg. 3);
-* evaluation and baselines (Sec. 6).
+</div>
 
-[docs/paper_map.md](docs/paper_map.md) maps every section, equation and algorithm line to
-code or to "separate servers".
+## Overview
 
-## Layout
+Facet-0 predicts and values the contact consequences of its actions. Vision, language, kinematics and causal wrench history condition a joint **action–wrench proposal**: Cartesian actions are executed; future wrench remains a prediction.
 
-```
-facet0/
-  conventions.py        state / action / proposal layout (Eq. 1), H = 50, K = 10, guidance tag
-  model.py              Facet-0 policy: E_s and E_w tokens in the action expert, Y in R^{H x 13}
-  contact.py            contact intensity c_t and regime rho_t
-  action_wrench.py      Y^data wrench columns (next-step pairing), masks M^a / M^w, history W
-  data/                 rollout ingestion, corpus frames, normalization statistics
-  refinement/
-    reward.py           interaction reward (Eq. 4) and returns
-    encode.py           h^c and proposals Y ~ pi_ref for every stored frame
-    critic.py           Action-Wrench Critic (Eq. 5) with four auxiliary heads
-    credit.py           contact-selective credit (Eq. 6) and labels b_t
-    objective.py        action-wrench loss (Eq. 3) and refinement loss (Eq. 7)
-    data.py, train.py   refinement data pipeline and trainer (Alg. 2, line 8)
-  policy/               transforms, guided sampling, checkpoint I/O, policy, server
-scripts/                one refinement round, step by step (see docs/recipe.md)
-docs/                   paper map, recipe, implementation notes
-tests/                  CPU tests, including dummy-size model tests
-```
+This branch provides the three-stage learning pipeline and policy interfaces:
 
-## Install
+| Stage | Purpose | Implementation |
+| :--- | :--- | :--- |
+| **01 · Align** | Joint action–wrench flow matching with alternating VQA supervision | [Pretraining](facet0/pretraining/) |
+| **02 · Refine** | Distributional values, contact-selective credit and guided policy updates | [Refinement](facet0/refinement/) |
+| **03 · Adapt** | Frozen contact tokens and bounded local actor–critic learning | [Online adaptation](facet-online-adaptation/) |
+
+## Quick start
+
+Use **Python 3.11** and the pinned OpenPI checkout below. JAX and PyTorch may also run in separate environments; see the [setup and training guide](docs/getting_started.md).
 
 ```bash
-git clone -b post-training https://github.com/PINE-Lab-NTU/FACET.git
-git clone https://github.com/Physical-Intelligence/openpi.git   # JAX pi0.5 stack
-git -C openpi checkout 650c5b0
-pip install -e openpi -e openpi/packages/openpi-client
-pip install -e "./FACET[policy,test]"
+git clone --branch post-training https://github.com/PINE-Lab-NTU/FACET.git
+git clone https://github.com/Physical-Intelligence/openpi.git
+git -C openpi checkout 650c5b0283a49c42784fb5055a0507da2c6d347d
+cd FACET
+pip install --no-deps -e ../openpi -e ../openpi/packages/openpi-client
+pip install -e '.[policy,test]' -e './facet-online-adaptation[test]'
 ```
 
-Developed and tested with openpi at commit `650c5b0`, Python 3.11, JAX 0.7.2, flax 0.10.2,
-optax 0.2.4, orbax-checkpoint 0.11 and lerobot 0.3.3.
-
-## Run a refinement round
+Run the complete CPU example in a new output directory:
 
 ```bash
-export OPENPI_SRC=/path/to/openpi/src DATASET=/data/rollouts_r1 ROUND=r1
-RAW=/data/raw_rollouts_r1 bash scripts/prepare_rollouts.sh
-bash scripts/rewards.sh
-PI_REF=<pi_align>/params bash scripts/encode.sh
-CRITIC=critics/r1 bash scripts/train_critic.sh
-CRITIC=critics/r1 bash scripts/credit.sh
-PI_REF=<pi_align>/params CKPT_DIR=/nvme/ckpts bash scripts/refine_policy.sh
+export PYTHONPATH="$PWD/../openpi/src:$PWD/../openpi/packages/openpi-client/src"
+JAX_PLATFORMS=cpu python examples/small_pipeline.py --output-dir /tmp/facet-small
 ```
 
-[docs/recipe.md](docs/recipe.md) covers later rounds and what to check after each step.
+The [example](examples/) trains small networks on synthetic data and verifies checkpoints, critic learning, token reconstruction, BC → RL → frozen evaluation, and coarse/refinement scheduling. Full-scale training uses external data, weights, judge models and robot controllers.
 
-## Use the released policy
+## Documentation
 
-The `facet0-post-training` weights in [Pinelab/Facet-0](https://huggingface.co/Pinelab/Facet-0)
-are the policy after one refinement round with this code.
-
-```bash
-hf download Pinelab/Facet-0 --include "facet0-post-training/*" --local-dir .
-```
-
-```python
-import facet0.policy
-
-policy = facet0.policy.load("facet0-post-training")            # or a checkpoint step of your own round
-history = facet0.policy.WrenchHistory()                        # latest 10 wrenches, 15 Hz timeline
-history.push(state[7:13])
-out = policy.infer({
-    "observation/state": state,                                # float32 [13]: pose, gripper, wrench
-    "observation/wrench_history": history.window(),            # float32 [10, 6], oldest first
-    "observation/image": view1,
-    "observation/wrist_image": hand,
-    "observation/extra_view_image": view2,
-    "prompt": "press down the RAM until it locks into place",
-})
-out["actions"]   # [50, 7] absolute pose + gripper
-out["wrench"]    # [50, 6] anticipated wrench (N, N m)
-```
-
-`MODEL_DIR=facet0-post-training OPENPI_SRC=... bash scripts/serve.sh` serves it over the
-openpi websocket protocol.
-
-## Tests
-
-```bash
-PYTHONPATH=$OPENPI_SRC:. pytest tests
-```
+[Training & serving](docs/getting_started.md) · [Model interfaces](docs/implementation_notes.md) · [Paper mapping](docs/paper_map.md) · [Changes](CHANGES.md)
 
 ## Citation
 
 ```bibtex
 @article{deng2026facet0,
   title   = {Facet-0: A Robotic Foundation Model for Contact-Rich Precise Manipulation},
-  author  = {Deng, Haoyuan and Liu, Haichao and Guo, Wenkai and Ling, Yuan and Yang, Zaijia and
-             Xue, Yuanjiang and Sun, Haosheng and Wang, Liangzi and Wang, Ziwei},
+  author  = {Deng, Haoyuan and Liu, Haichao and Guo, Wenkai and Ling, Yuan and
+             Yang, Zaijia and Xue, Yuanjiang and Sun, Haosheng and Wang, Liangzi and Wang, Ziwei},
   journal = {arXiv preprint arXiv:2609.01596},
   year    = {2026}
 }
 ```
 
-## License
-
-Apache-2.0. The model and trainer build on openpi (Apache-2.0).
+[Apache-2.0](LICENSE). Upstream code, model weights and datasets retain their respective terms.<br>
+Research and collaboration: [ziwei.wang@ntu.edu.sg](mailto:ziwei.wang@ntu.edu.sg).
