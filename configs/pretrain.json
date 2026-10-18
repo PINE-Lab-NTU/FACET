@@ -1,0 +1,23 @@
+{
+  "dataset": "data/demonstrations",
+  "split": "data/split.json",
+  "norm_stats": "assets/normalization",
+  "initial": "checkpoints/initial",
+  "vqa_records": "data/vqa/records.jsonl",
+  "vqa_images": "data/vqa/images",
+  "output": "checkpoints/pretraining",
+  "steps": 40000,
+  "save_every": 1000,
+  "aw_batch_size": 32,
+  "microbatch_size": 4,
+  "vqa_batch_size": 16,
+  "aw_lr": 5e-05,
+  "vqa_lr": 1e-05,
+  "wrench_weight": 0.1,
+  "seed": 42,
+  "tier_weights": {
+    "base": 1.0,
+    "precision": 2.0,
+    "recovery": 2.0
+  }
+}

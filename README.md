@@ -1,70 +1,57 @@
+<p align="center">
+  <a href="https://pine-lab-ntu.github.io/facet-0/"><img src="docs/assets/facet-header.svg" alt="Facet-0 — a robotic foundation model for contact-rich precise manipulation" width="100%"></a>
+</p>
+
 <div align="center">
 
-# Facet-0: A Robotic Foundation Model for Contact-Rich Precise Manipulation
+**A Robotic Foundation Model for Contact-Rich Precise Manipulation**
 
-[![arXiv](https://img.shields.io/badge/arXiv-2609.01596-b31b1b.svg)](https://arxiv.org/abs/2609.01596)
-[![Project Page](https://img.shields.io/badge/Project-Page-4c8bf5.svg)](https://pine-lab-ntu.github.io/facet-0/)
-[![Model](https://img.shields.io/badge/%F0%9F%A4%97%20Model-Facet--0-yellow.svg)](https://huggingface.co/Pinelab/Facet-0)
-[![Dataset](https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-ManuFacet--1K-yellow.svg)](https://huggingface.co/datasets/Pinelab/ManuFacet-1K)
+[Haoyuan Deng](https://denghaoyuan123.github.io/)<sup>*</sup> · [Haichao Liu](https://henryhcliu.github.io/)<sup>*</sup> · [Wenkai Guo](https://wkguo.github.io/)<sup>*</sup> · [Yuan Ling](https://u-li-li.github.io/lingyuan.github.io/) · [Zaijia Yang](https://yangzaijia.github.io/) · [Yuanjiang Xue](https://xuanyuan-jiang.github.io/) · Haosheng Sun · Liangzi Wang · [Ziwei Wang](https://ziweiwangthu.github.io/)<sup>†</sup>
 
-**[PINE Lab](https://pine-lab-ntu.github.io/), Nanyang Technological University, Singapore**
+**PINE Lab · Nanyang Technological University, Singapore**<br>
+<sub>* Equal contribution · † Corresponding author</sub>
 
-[Haoyuan Deng](https://denghaoyuan123.github.io/)\*,
-[Haichao Liu](https://henryhcliu.github.io/)\*,
-[Wenkai Guo](https://wkguo.github.io/)\*,
-[Yuan Ling](https://u-li-li.github.io/lingyuan.github.io/),
-[Zaijia Yang](https://yangzaijia.github.io/),
-[Yuanjiang Xue](https://xuanyuan-jiang.github.io/),
-Haosheng Sun,
-Liangzi Wang,
-[Ziwei Wang](https://ziweiwangthu.github.io/)†
-
-<sub>\*Equal contribution &nbsp;·&nbsp; †Corresponding author</sub>
+[Project](https://pine-lab-ntu.github.io/facet-0/) &nbsp; / &nbsp; [Paper](https://arxiv.org/abs/2609.01596) &nbsp; / &nbsp; [Model](https://huggingface.co/Pinelab/Facet-0) &nbsp; / &nbsp; [ManuFacet-1K](https://huggingface.co/datasets/Pinelab/ManuFacet-1K)
 
 </div>
 
----
-
-## Code
-
-The post-training code (value-guided policy refinement) is on the
-[`post-training`](https://github.com/PINE-Lab-NTU/FACET/tree/post-training) branch.
-
-
----
-
 ## Overview
 
-Real-world robotic assembly at sub-millimeter tolerances demands spatial precision, compliant interaction, and robustness to contact failures. **Facet-0** is a robotic foundation model that *predicts and values the contact consequences of its actions*.
+Facet-0 predicts and values the contact consequences of its actions. Vision, language, kinematics and causal wrench history condition a joint **action–wrench proposal**: Cartesian actions are executed; future wrench remains a prediction.
 
-It unifies multimodal representation learning and RL post-training around a **joint action–wrench proposal**: a causal wrench history is aligned with vision–language semantics and kinematic state, and flow matching generates each action chunk together with the future wrist-wrench profile it is expected to induce.
+This repository provides the three-stage learning pipeline and policy interfaces:
 
-Force is not merely an input. It is an **observation**, an **objective**, and an **interface for actuation** — which is what lets the policy feel a jam and act on it.
+| Stage | Purpose | Implementation |
+| :--- | :--- | :--- |
+| **01 · Align** | Joint action–wrench flow matching with alternating VQA supervision | [Pretraining](facet0/pretraining/) |
+| **02 · Refine** | Distributional values, contact-selective credit and guided policy updates | [Refinement](facet0/refinement/) |
+| **03 · Adapt** | Frozen contact tokens and bounded local actor–critic learning | [Online adaptation](facet-online-adaptation/) |
 
-## Results
+## Quick start
 
-On a five-task sub-millimeter computer-assembly benchmark (RAM, CPU, Disk, GPU, retention-bar close):
+Use **Python 3.11** and the pinned OpenPI checkout below. JAX and PyTorch may also run in separate environments; see the [setup and training guide](docs/getting_started.md).
 
-| Metric | Facet-0 | Baseline |
-|---|---|---|
-| Mean success (5 tasks) | **82%** | 15% (strongest), 10% (π₀.₅), 4% (GR00T N1.7) |
-| Placement accuracy | **0.5 mm** | ≈5 mm (π₀.₅) |
-| Command latency | **50 ms** | 150 ms (π₀.₅) |
-| Few-shot transfer to an unseen module | **45%** | 5% (strongest) |
+```bash
+git clone https://github.com/PINE-Lab-NTU/FACET.git
+git clone https://github.com/Physical-Intelligence/openpi.git
+git -C openpi checkout 650c5b0283a49c42784fb5055a0507da2c6d347d
+cd FACET
+pip install --no-deps -e ../openpi -e ../openpi/packages/openpi-client
+pip install -e '.[policy,test]' -e './facet-online-adaptation[test]'
+```
 
-Controlled variants progress **16% → 38% → 82%** as semantic–contact alignment, value-guided refinement, and local adaptation are added in turn.
+Run the complete CPU example in a new output directory:
 
-Against matched advantage-weighted behavior cloning on the same deployment corpus, critic-guided post-training lowers **intervention 47% → 24%** and raises **recovery 44% → 81%**.
+```bash
+export PYTHONPATH="$PWD/../openpi/src:$PWD/../openpi/packages/openpi-client/src"
+JAX_PLATFORMS=cpu python examples/small_pipeline.py --output-dir /tmp/facet-small
+```
 
-Adaptation to an unseen memory module takes **ten demonstrations and about three hours**, updating **6.6% of the parameters**.
+The [example](examples/) trains small networks on synthetic data and verifies checkpoints, critic learning, token reconstruction, BC → RL → frozen evaluation, and coarse/refinement scheduling. Full-scale training uses external data, weights, judge models and robot controllers.
 
-## ManuFacet-1K
+## Documentation
 
-A **1,000-hour** corpus of force-synchronized demonstrations and closed-loop rollouts, collected across **three robot embodiments**, **two chassis families**, and **multiple manufacturing cells** under one sensing and annotation protocol.
-
-Every frame carries a 13-D proprioceptive state — end-effector pose, gripper opening, and six-axis wrench — so the corpus is force-annotated by construction. Segments are labeled with a skill-phase taxonomy, and failures, human takeovers, and recoveries are retained rather than filtered away.
-
-🤗 [huggingface.co/datasets/Pinelab/ManuFacet-1K](https://huggingface.co/datasets/Pinelab/ManuFacet-1K)
+[Training & serving](docs/getting_started.md) · [Model interfaces](docs/implementation_notes.md) · [Paper mapping](docs/paper_map.md) · [Changes](CHANGES.md)
 
 ## Citation
 
@@ -72,13 +59,11 @@ Every frame carries a 13-D proprioceptive state — end-effector pose, gripper o
 @article{deng2026facet0,
   title   = {Facet-0: A Robotic Foundation Model for Contact-Rich Precise Manipulation},
   author  = {Deng, Haoyuan and Liu, Haichao and Guo, Wenkai and Ling, Yuan and
-             Yang, Zaijia and Xue, Yuanjiang and Sun, Haosheng and Wang, Liangzi and
-             Wang, Ziwei},
+             Yang, Zaijia and Xue, Yuanjiang and Sun, Haosheng and Wang, Liangzi and Wang, Ziwei},
   journal = {arXiv preprint arXiv:2609.01596},
   year    = {2026}
 }
 ```
 
-## Contact
-
-Questions and collaboration enquiries: [ziwei.wang@ntu.edu.sg](mailto:ziwei.wang@ntu.edu.sg)
+[Apache-2.0](LICENSE). Upstream code, model weights and datasets retain their respective terms.<br>
+Research and collaboration: [ziwei.wang@ntu.edu.sg](mailto:ziwei.wang@ntu.edu.sg).

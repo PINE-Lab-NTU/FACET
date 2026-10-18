@@ -1,0 +1,7 @@
+robot:
+  backend: mock
+runtime:
+  mode: bc
+  output_dir: runs
+learner:
+  device: cpu

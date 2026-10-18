@@ -1,0 +1,34 @@
+robot:
+  backend: franka
+  address: http://127.0.0.1:5000
+  gripper: robotiq
+safety:
+  workspace_min: null
+  workspace_max: null
+  max_linear_speed_m_s: 0.05
+  max_angular_speed_rad_s: 0.3
+  max_force_n: 40
+policy:
+  host: 127.0.0.1
+  port: 8000
+  prompt: ""
+  checkpoint_id: ""
+  token_id: ""
+  execute_steps: 1
+  max_latency_s: 1.0
+  position_sign: [1, 1, 1]
+cameras:
+  serials: {view1: "", hand: ""}
+  aliases: {view2: view1}
+runtime:
+  mode: bc
+  hz: 10
+  output_dir: runs
+  teleop: spacemouse
+  teleop_axis_sign: [1, 1, 1]
+learner:
+  device: cpu
+  actor_mode: absolute
+  critic_target: td
+  td3_bc_target: demo
+  demo_success_only: true

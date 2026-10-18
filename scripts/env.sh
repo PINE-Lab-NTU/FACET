@@ -1,0 +1,8 @@
+export FACET0_ROOT="${FACET0_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+export PY="${PY:-python}"
+export OPENPI_SRC="${OPENPI_SRC:?set OPENPI_SRC to <openpi checkout>/src}"
+export DATASET="${DATASET:?set DATASET to the RL-ready rollout corpus of this round}"
+export ROUND="${ROUND:?set ROUND to a name for this refinement round, e.g. r1}"
+export RETURNS_TAG="${RETURNS_TAG:-$ROUND}"
+export FEATURES="${FEATURES:-$DATASET/meta/features_$ROUND}"
+export PYTHONPATH="${FACET0_ROOT}:${OPENPI_SRC}:${PYTHONPATH:-}"
