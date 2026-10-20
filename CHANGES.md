@@ -1,6 +1,6 @@
 # Changes
 
-## 2026-10-20 — online adaptation: critic-gated TD3+BC
+## Online adaptation: critic-gated TD3+BC
 
 | Change | Reason | Interface | Validation |
 | --- | --- | --- | --- |
@@ -13,10 +13,18 @@
 | Wire `demo_success_only` and `demo_seed_success_episodes` | Both were read nowhere | config | Demo-rule tests |
 | Optional cosine Critic LR decay; per-episode BC/Q-gradient update counts; checkpoint format v4 (v3 migrates) | Auditable RL contribution and resumable gate state | `critic_lr_schedule`; metrics; `facet_online_adaptation_v4` | Round-trip and migration tests |
 
-The schedule follows the critic-gated TD3+BC procedure validated offline and the update
-cadence of the online run in which the Actor first completed insertions without human
-input. The gate does not establish robot success; use frozen `eval` runs, including the
-`actor_q_weight: 0` control, for that.
+The schedule follows our offline critic-gated TD3+BC procedure and the update cadence of
+our internal robot runs; those logs are not part of this repository. The gate does not
+establish robot success; use frozen `eval` runs, including the `actor_q_weight: 0` control,
+for that. The `mc` default deviates from the paper's TD target and is listed in
+`docs/paper_map.md`.
+
+Review follow-up:
+
+| Change | Reason | Validation |
+| --- | --- | --- |
+| Actor-side gate failures no longer freeze the Actor. A trust-region failure re-anchors at the current Actor and needs a fresh Critic streak; a behaviour failure runs BC-only recovery steps. Critic-side failures still hold the Actor. | With hold enabled, a drift or behaviour failure froze the Actor, so the failed quantity could never change and RL stopped permanently | Re-anchor/reopen test with the Actor pushed far outside the region; BC-recovery test; Critic-hold test |
+| Monitor hold-out only in `rl` mode with the gate enabled | `bc` mode discarded 20% of corrections for a monitor it does not use | bc-mode and ungated retention tests |
 
 ## 2026-10-18
 

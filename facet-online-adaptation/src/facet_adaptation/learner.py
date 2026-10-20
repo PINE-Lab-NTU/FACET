@@ -20,10 +20,7 @@ from .models import Actor, TwinQCritic
 from .replay import ReplayBuffer
 
 CHECKPOINT_FORMAT = "facet_online_adaptation_v4"
-# v3 checkpoints share the network/replay layout; they resume with a fresh gate, monitor and seed.
 MIGRATABLE_FORMATS = {"facet_online_adaptation_v3"}
-# Schedule and gate settings may change between sessions; architecture, action space and the
-# Critic regression rule may not.
 MUTABLE_CONFIG = {
     "device",
     "actor_lr",
@@ -49,7 +46,7 @@ MUTABLE_CONFIG = {
     "gate_disagreement_max",
     "gate_fixed_q_delta_max",
     "gate_target_q_delta_max",
-    "gate_seed_drift_max_m",
+    "gate_trust_region_max_m",
     "gate_bc_degradation_max",
     "critic_lr_schedule",
     "critic_lr_final",
@@ -79,12 +76,6 @@ def critic_targets(td, mc, mode):
 
 
 def actor_loss_components(q, proposed, target, beta, weights=None, q_weight=1.0):
-    """TD3+BC Actor loss ``q_weight * (-Q) + beta * BC``.
-
-    ``q=None`` (or ``q_weight=0``) gives the matched BC control: same rows, same BC weighting,
-    no Critic term in the graph.
-    """
-
     per_row = (proposed - target).square().sum(-1)
     bc = per_row.mean() if weights is None else (per_row * weights).sum() / weights.sum().clamp_min(1)
     policy = torch.zeros((), device=proposed.device) if q is None else -q.mean()
@@ -92,7 +83,6 @@ def actor_loss_components(q, proposed, target, beta, weights=None, q_weight=1.0)
 
 
 def critic_lr_at(config, updates):
-    """Critic LR on the Critic-update clock: hold through gate_min_updates, then optional cosine."""
     if config.critic_lr_schedule == "constant" or not config.critic_lr_decay_updates:
         return config.critic_lr
     progress = min(1.0, max(0, updates - config.gate_min_updates) / config.critic_lr_decay_updates)
@@ -142,10 +132,11 @@ class Learner:
         self.std = (np.asarray(config.action_max, np.float32) - config.action_min) / 2
         self.fused, self.guard_count = False, 0
         self.last_metrics = {}
-        # Critic-gated TD3+BC state.
         self.gate = CriticReadinessGate(GateLimits.from_config(config))
-        self.seed_actor = None  # BC seed the gate measures drift/degradation against
-        self.monitor = []  # held-out labelled episodes, never trained on
+        self.seed_actor = None
+        self.anchor_actor = None
+        self.reanchors = 0
+        self.monitor = []
         self.labelled_episodes = 0
         self.rl_active_critic_updates = 0
         self.td3_actor_updates = self.held_actor_updates = 0
@@ -248,7 +239,11 @@ class Learner:
         else:
             rewards[-1] = float(success)
         returns = discounted_returns(rewards, self.config.gamma)
-        held_out = self.config.monitor_every > 0 and (self.labelled_episodes + 1) % self.config.monitor_every == 0
+        held_out = (
+            self.mode == "rl"
+            and self.config.critic_gate
+            and (self.labelled_episodes + 1) % self.config.monitor_every == 0
+        )
         seed_demo = (
             success and not held_out and self.demo_successes < self.config.demo_seed_success_episodes
         )
@@ -299,8 +294,6 @@ class Learner:
         self.episodes += 1
         metrics = {}
         bc_before, td3_before = self.bc_updates, self.td3_actor_updates
-        # Intervention BC only consumes NEW confirmed labels; replaying the whole label set after every
-        # autonomous episode would let BC dominate the Actor.
         bc_steps = self.config.intervention_updates_per_episode if self.mode == "bc" else (
             self.config.rl_intervention_updates_per_episode
         )
@@ -328,6 +321,7 @@ class Learner:
             "episode_td3_actor_updates": td3_now,
             "episode_q_gradient_share": td3_now / max(1, bc_now + td3_now),
             "gate_active": float(self.gate.active),
+            "gate_reanchors": self.reanchors,
             "rl_active_critic_updates": self.rl_active_critic_updates,
             "success": float(success),
             "fused": self.fused,
@@ -382,8 +376,9 @@ class Learner:
         if self.mode != "rl" or self.fused:
             raise RuntimeError("TD3 update forbidden in this mode/state")
         if self.seed_actor is None:
-            # The BC seed is the Actor as RL training starts; the gate measures drift against it.
             self.seed_actor = copy.deepcopy(self.actor).eval().requires_grad_(False)
+        if self.anchor_actor is None:
+            self.anchor_actor = copy.deepcopy(self.actor).eval().requires_grad_(False)
         for group in self.critic_optimizer.param_groups:
             group["lr"] = critic_lr_at(self.config, self.updates)
         half = self.config.batch_size // 2
@@ -419,7 +414,7 @@ class Learner:
             self.fused = True
             return {"fused": True, "q_abs_max": magnitude}
         self._optimizer_step(self.critic_optimizer, self.critic, loss)
-        step = self.updates + 1  # Critic-update clock, 1-based like the offline schedule
+        step = self.updates + 1
         metrics = {
             "critic_loss": float(loss.detach()),
             "target_q": float(target.mean()),
@@ -443,9 +438,13 @@ class Learner:
             if rl_active:
                 metrics.update(self._actor_step(b, half, has_demo, beta, self.config.actor_q_weight))
                 self.td3_actor_updates += int(self.config.actor_q_weight > 0)
-            elif not self.config.hold_actor_until_critic_ready:
-                # Gate closed and no hold: keep BC-accumulating on the same cadence, without Q.
+            elif not self.config.hold_actor_until_critic_ready or (
+                self.config.critic_gate
+                and self.gate.critic_ready()
+                and "successful_behavior" in self.gate.last_failed
+            ):
                 metrics.update(self._actor_step(b, half, has_demo, self.config.bc_beta, 0.0))
+                metrics["actor_bc_recovery"] = float(self.gate.critic_ready())
             else:
                 self.held_actor_updates += 1
                 metrics["actor_held_for_critic_gate"] = 1.0
@@ -495,10 +494,9 @@ class Learner:
 
     @torch.no_grad()
     def gate_metrics(self):
-        """Critic and Actor checks on held-out monitor episodes (recorded states and actions)."""
         nan = float("nan")
         empty = dict(success_terminals=0, failure_terminals=0, terminal_brier=nan, success_terminal_q=nan,
-                     failure_terminal_q=nan, q_disagreement=nan, seed_drift_p95_m=nan, bc_degradation=nan)
+                     failure_terminal_q=nan, q_disagreement=nan, anchor_drift_p95_m=nan, bc_degradation=nan)
         if not self.monitor or self.seed_actor is None:
             return empty, (np.zeros(0), np.zeros(0))
         x = self.tensor(np.concatenate([e["x"] for e in self.monitor]))
@@ -516,7 +514,8 @@ class Learner:
         self.actor.eval()
         proposal = self.project(self.actor(x, ref, reference_dropout=False), ref)
         seed = self.project(self.seed_actor(x, ref, reference_dropout=False), ref)
-        drift = torch.linalg.vector_norm(proposal[:, :3] - seed[:, :3], dim=1).cpu().numpy()
+        anchor = self.project(self.anchor_actor(x, ref, reference_dropout=False), ref)
+        drift = torch.linalg.vector_norm(proposal[:, :3] - anchor[:, :3], dim=1).cpu().numpy()
         pose = self.tensor(np.r_[np.asarray(self.config.action_mask[:6], np.float32), 0.0])
         rows = torch.as_tensor(success, device=self.device)
 
@@ -534,7 +533,7 @@ class Learner:
             success_terminal_q=float(terminal_q[labels].mean()) if labels.any() else nan,
             failure_terminal_q=float(terminal_q[~labels].mean()) if (~labels).any() else nan,
             q_disagreement=float((q1 - q2).abs().mean()),
-            seed_drift_p95_m=float(np.percentile(drift, 95)),
+            anchor_drift_p95_m=float(np.percentile(drift, 95)),
             bc_degradation=current / initial if initial > 0 else (1.0 if current == 0 else nan),
         )
         return metrics, (q, target_q)
@@ -543,7 +542,11 @@ class Learner:
         metrics, probe = self.gate_metrics()
         result = {f"gate/{k}": float(v) for k, v in metrics.items()}
         result.update(self.gate.observe(step, metrics, probe))
-        # Unavailable checks (empty monitor, first probe) are logged as null; run metrics are strict JSON.
+        if "actor_trust_region" in self.gate.last_failed:
+            self.anchor_actor = copy.deepcopy(self.actor).eval().requires_grad_(False)
+            self.reanchors += 1
+            self.gate.events.append({"update": int(step), "event": "reanchored"})
+            result["gate_reanchored"] = 1.0
         result = {k: (None if isinstance(v, float) and not np.isfinite(v) else v) for k, v in result.items()}
         self.last_gate_metrics = result
         return result
@@ -558,6 +561,8 @@ class Learner:
             {
                 "format": CHECKPOINT_FORMAT,
                 "seed_actor": None if self.seed_actor is None else self.seed_actor.state_dict(),
+                "anchor_actor": None if self.anchor_actor is None else self.anchor_actor.state_dict(),
+                "reanchors": self.reanchors,
                 "gate": self.gate.state_dict(),
                 "monitor": self.monitor,
                 "labelled_episodes": self.labelled_episodes,
@@ -597,8 +602,6 @@ class Learner:
             raise ValueError("legacy deployment checkpoints require explicit migration/retraining")
         if p["contract"] != contract:
             raise ValueError("checkpoint policy/token/robot-frame contract mismatch")
-        # Fields added after the saved format keep their configured values; every saved field that
-        # is not a schedule/gate setting must match exactly.
         saved = p["config"]
         if any(saved[k] != v for k, v in asdict(self.config).items() if k in saved and k not in MUTABLE_CONFIG):
             raise ValueError(
@@ -623,13 +626,15 @@ class Learner:
             if p["seed_actor"] is not None:
                 self.seed_actor = copy.deepcopy(self.actor).eval().requires_grad_(False)
                 self.seed_actor.load_state_dict(p["seed_actor"])
+            if p.get("anchor_actor") is not None:
+                self.anchor_actor = copy.deepcopy(self.actor).eval().requires_grad_(False)
+                self.anchor_actor.load_state_dict(p["anchor_actor"])
+            self.reanchors = int(p.get("reanchors", 0))
             self.gate.load_state_dict(p["gate"])
             self.monitor = p["monitor"]
             for name in ("labelled_episodes", "rl_active_critic_updates", "td3_actor_updates", "held_actor_updates"):
                 setattr(self, name, p[name])
         else:
-            # Migrated run: the gate starts closed, the monitor empty, and the seed is the loaded Actor
-            # at the first RL update.
             self.labelled_episodes = self.episodes
         np.random.set_state(p["numpy_rng"])
         torch.set_rng_state(p["torch_rng"].cpu())

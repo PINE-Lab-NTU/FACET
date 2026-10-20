@@ -35,7 +35,7 @@ def test_defaults_follow_the_validated_recipe():
     assert (c.actor_lr, c.critic_lr, c.critic_updates_per_actor, c.updates_per_transition) == (1e-6, 1e-4, 20, 5)
     assert (c.bc_beta, c.bc_beta_end, c.bc_anneal_critic_updates) == (1.0, 0.3, 3000)
     assert c.critic_gate and c.hold_actor_until_critic_ready and c.actor_q_weight == 1.0
-    assert (c.gate_min_updates, c.gate_consecutive_passes, c.gate_seed_drift_max_m) == (750, 3, 0.001)
+    assert (c.gate_min_updates, c.gate_consecutive_passes, c.gate_trust_region_max_m) == (750, 3, 0.001)
     assert c.rl_intervention_updates_per_episode == 0
 
 
@@ -63,7 +63,7 @@ def test_annealed_beta_and_critic_lr_schedules():
 
 def passing():
     return dict(success_terminals=5, failure_terminals=5, terminal_brier=0.05, success_terminal_q=0.8,
-                failure_terminal_q=0.1, q_disagreement=0.01, seed_drift_p95_m=0.0005, bc_degradation=1.0)
+                failure_terminal_q=0.1, q_disagreement=0.01, anchor_drift_p95_m=0.0005, bc_degradation=1.0)
 
 
 def test_gate_needs_consecutive_passes_and_closes_on_any_failure():
@@ -75,9 +75,9 @@ def test_gate_needs_consecutive_passes_and_closes_on_any_failure():
     assert not gate.active
     gate.observe(10, passing(), probe)
     assert gate.active and gate.events[-1]["event"] == "opened"
-    bad = dict(passing(), seed_drift_p95_m=0.002)
+    bad = dict(passing(), anchor_drift_p95_m=0.002)
     gate.observe(10, bad, probe)
-    assert not gate.active and gate.last_failed == ["actor_seed_drift"] and gate.pass_streak == 0
+    assert not gate.active and gate.last_failed == ["actor_trust_region"] and gate.pass_streak == 0
     assert gate.events[-1]["event"] == "paused"
 
 
@@ -110,13 +110,22 @@ def test_minimum_updates_and_probe_change_block_the_gate():
     assert set(gate.last_failed) == {"fixed_q_stability", "target_q_stability"}
 
 
-def test_every_nth_labelled_episode_is_held_out_of_training(learner_config):
-    learner = Learner(replace(learner_config, monitor_every=2))
+def test_every_nth_labelled_rl_episode_is_held_out_of_training(learner_config):
+    learner = Learner(replace(learner_config, monitor_every=2, updates_per_transition=0), mode="rl")
     learner.finish_episode(episode(learner), success=True)
     assert (learner.replay.size, len(learner.monitor), len(learner.interventions)) == (6, 0, 6)
     metrics = learner.finish_episode(episode(learner), success=False)
     assert (learner.replay.size, len(learner.monitor), len(learner.interventions)) == (6, 1, 6)
     assert metrics["held_out_for_monitor"] == 1.0 and metrics["episode_bc_updates"] == 0
+
+
+@pytest.mark.parametrize("mode, gate", [("bc", True), ("rl", False)])
+def test_no_corrections_are_held_out_where_the_gate_is_unused(learner_config, mode, gate):
+    learner = Learner(replace(learner_config, monitor_every=2, updates_per_transition=0, critic_gate=gate),
+                      mode=mode)
+    for _ in range(4):
+        learner.finish_episode(episode(learner), success=True)
+    assert learner.replay.size == 24 and len(learner.interventions) == 24 and not learner.monitor
 
 
 def test_intervention_bc_only_runs_for_new_confirmed_labels(learner_config):
@@ -213,7 +222,7 @@ def test_gate_metrics_use_the_held_out_monitor(learner_config):
                            rewards=np.zeros(1), next_x=x, done=0.0)
     metrics = learner.update_td3()
     assert metrics["gate/success_terminals"] == 2 and metrics["gate/failure_terminals"] == 1
-    assert metrics["gate/seed_drift_p95_m"] == 0.0 and metrics["gate/bc_degradation"] == pytest.approx(1.0)
+    assert metrics["gate/anchor_drift_p95_m"] == 0.0 and metrics["gate/bc_degradation"] == pytest.approx(1.0)
     assert "minimum_critic_updates" in metrics["gate_failed_checks"]
 
 
@@ -260,3 +269,63 @@ def test_gate_metrics_are_strict_json_before_the_monitor_exists(learner_config):
     assert metrics["gate/success_terminals"] == 0 and metrics["gate/terminal_brier"] is None
     assert metrics["gate_fixed_q_delta_rms"] is None
     json.dumps(metrics, allow_nan=False)
+
+
+def forced_critic_pass(learner):
+    """Real Actor-side metrics (drift, behaviour); Critic-side checks forced to pass."""
+    original = learner.gate_metrics
+
+    def metrics():
+        values, _ = original()
+        values.update(success_terminals=5, failure_terminals=5, terminal_brier=0.0, success_terminal_q=1.0,
+                      failure_terminal_q=0.0, q_disagreement=0.0)
+        return values, (np.ones(3), np.ones(3))
+
+    learner.gate_metrics = metrics
+
+
+def test_trust_region_failure_reanchors_instead_of_locking(learner_config):
+    learner = rl_learner(learner_config, monitor_every=2, gate_eval_every=1, gate_min_updates=0,
+                         gate_consecutive_passes=2, gate_bc_degradation_max=1e9)
+    forced_critic_pass(learner)
+    learner.finish_episode(episode(learner), success=True)  # trained
+    learner.finish_episode(episode(learner), success=True)  # held out: successful monitor rows
+    learner.update_td3()  # seed and anchor
+    with torch.no_grad():  # push the Actor far outside the 1 mm trust region
+        last = [m for m in learner.actor.mlp.net if isinstance(m, torch.nn.Linear)][-1]
+        last.bias[:3] += 2.0
+    metrics = learner.update_td3()
+    assert metrics.get("gate_reanchored") == 1.0 and not learner.gate.active
+    for _ in range(3):
+        learner.update_td3()
+    assert learner.gate.active, "gate must reopen after re-anchoring once the Critic passes again"
+    before = actor_vector(learner)
+    learner.update_td3()
+    assert learner.td3_actor_updates >= 1 and not torch.equal(before, actor_vector(learner))
+
+
+def test_behaviour_failure_runs_bc_recovery_instead_of_freezing(learner_config):
+    learner = rl_learner(learner_config, monitor_every=2, gate_eval_every=1, gate_min_updates=0,
+                         gate_trust_region_max_m=1e9, gate_bc_degradation_max=1e-9)
+    forced_critic_pass(learner)
+    learner.finish_episode(episode(learner), success=True)  # trained
+    learner.finish_episode(episode(learner), success=True)  # held out: successful monitor rows
+    learner.update_td3()
+    with torch.no_grad():
+        last = [m for m in learner.actor.mlp.net if isinstance(m, torch.nn.Linear)][-1]
+        last.bias[:3] += 2.0
+    learner.update_td3()
+    assert learner.gate.critic_ready() and "successful_behavior" in learner.gate.last_failed
+    before = actor_vector(learner)
+    metrics = learner.update_td3()
+    assert metrics["actor_bc_recovery"] == 1.0 and metrics["actor_uses_q_gradient"] == 0.0
+    assert not torch.equal(before, actor_vector(learner))
+
+
+def test_critic_failures_still_hold_the_actor(learner_config):
+    learner = rl_learner(learner_config, gate_eval_every=1)  # empty monitor: Critic checks fail
+    learner.update_td3()
+    before = actor_vector(learner)
+    metrics = learner.update_td3()
+    assert not learner.gate.critic_ready() and metrics["actor_held_for_critic_gate"] == 1.0
+    torch.testing.assert_close(actor_vector(learner), before, rtol=0, atol=0)

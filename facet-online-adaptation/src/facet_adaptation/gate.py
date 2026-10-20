@@ -1,14 +1,4 @@
-"""Critic readiness gate and RL-active BC annealing for TD3+BC.
-
-The Actor first follows its behaviour-cloned seed while the Critic trains. Q gradients reach the
-Actor only after the Critic passes every readiness check on held-out monitor episodes for several
-consecutive evaluations. A failed check pauses RL immediately; reopening needs a fresh streak.
-The BC weight anneals on the clock of Critic updates taken while RL is active, so paused periods
-do not advance it.
-
-The gate is a conservative monitor. Passing it does not prove that the Actor succeeds more often
-on the robot; that requires frozen evaluation.
-"""
+"""Critic readiness gate and RL-active BC annealing for TD3+BC."""
 
 from __future__ import annotations
 
@@ -17,6 +7,8 @@ import copy
 import math
 
 import numpy as np
+
+ACTOR_CHECKS = frozenset({"actor_trust_region", "successful_behavior"})
 
 
 @dataclass(frozen=True)
@@ -30,7 +22,7 @@ class GateLimits:
     disagreement_max: float = 0.1
     fixed_q_delta_max: float = 0.02
     target_q_delta_max: float = 0.02
-    seed_drift_max_m: float = 0.001
+    trust_region_max_m: float = 0.001
     bc_degradation_max: float = 1.1
 
     @classmethod
@@ -45,7 +37,7 @@ class GateLimits:
             disagreement_max=config.gate_disagreement_max,
             fixed_q_delta_max=config.gate_fixed_q_delta_max,
             target_q_delta_max=config.gate_target_q_delta_max,
-            seed_drift_max_m=config.gate_seed_drift_max_m,
+            trust_region_max_m=config.gate_trust_region_max_m,
             bc_degradation_max=config.gate_bc_degradation_max,
         )
 
@@ -55,8 +47,6 @@ def _passes(value, predicate):
 
 
 class CriticReadinessGate:
-    """Opens after ``consecutive_passes`` fully passing evaluations; any failure closes it."""
-
     def __init__(self, limits: GateLimits):
         self.limits = limits
         self.active = False
@@ -64,11 +54,14 @@ class CriticReadinessGate:
         self.events: list[dict] = []
         self.last_failed: list[str] = []
         self.previous_probe: tuple[np.ndarray, np.ndarray] | None = None
+        self.evaluations = 0
+
+    def critic_ready(self):
+        return self.evaluations > 0 and not set(self.last_failed) - ACTOR_CHECKS
 
     def _probe_deltas(self, probe):
         q, target_q = (np.asarray(v, np.float64).reshape(-1) for v in probe)
         previous, self.previous_probe = self.previous_probe, (q.copy(), target_q.copy())
-        # A changed monitor population is not comparable; the stability checks fail once.
         if previous is None or previous[0].shape != q.shape or not len(q):
             return math.inf, math.inf
         return (
@@ -89,10 +82,11 @@ class CriticReadinessGate:
             "twin_q_disagreement": _passes(metrics["q_disagreement"], lambda v: v <= lim.disagreement_max),
             "fixed_q_stability": fixed_delta <= lim.fixed_q_delta_max,
             "target_q_stability": target_delta <= lim.target_q_delta_max,
-            "actor_seed_drift": _passes(metrics["seed_drift_p95_m"], lambda v: v <= lim.seed_drift_max_m),
+            "actor_trust_region": _passes(metrics["anchor_drift_p95_m"], lambda v: v <= lim.trust_region_max_m),
             "successful_behavior": _passes(metrics["bc_degradation"], lambda v: v <= lim.bc_degradation_max),
         }
         self.last_failed = [name for name, passed in checks.items() if not passed]
+        self.evaluations += 1
         self.pass_streak = 0 if self.last_failed else self.pass_streak + 1
         was_active = self.active
         self.active = self.pass_streak >= lim.consecutive_passes
@@ -117,6 +111,7 @@ class CriticReadinessGate:
             "pass_streak": self.pass_streak,
             "events": copy.deepcopy(self.events),
             "last_failed": list(self.last_failed),
+            "evaluations": self.evaluations,
             "previous_probe": None if self.previous_probe is None else [v.copy() for v in self.previous_probe],
         }
 
@@ -125,11 +120,11 @@ class CriticReadinessGate:
         self.pass_streak = int(state["pass_streak"])
         self.events = copy.deepcopy(state["events"])
         self.last_failed = list(state["last_failed"])
+        self.evaluations = int(state.get("evaluations", 0))
         probe = state.get("previous_probe")
         self.previous_probe = None if probe is None else tuple(np.asarray(v) for v in probe)
 
 
 def annealed_beta(start: float, end: float, anneal_updates: int, rl_active_updates: int) -> float:
-    """BC weight on the RL-active Critic-update clock: ``start`` -> ``end`` linearly, then held."""
     progress = min(1.0, rl_active_updates / anneal_updates) if anneal_updates else 0.0
     return float(start + progress * (end - start))
