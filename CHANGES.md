@@ -1,5 +1,23 @@
 # Changes
 
+## 2026-10-20 — online adaptation: critic-gated TD3+BC
+
+| Change | Reason | Interface | Validation |
+| --- | --- | --- | --- |
+| Hold the BC seed in `rl` mode until a Critic readiness gate passes on held-out monitor episodes (min updates, terminal coverage/Brier/success-Q/failure-Q, twin-Q disagreement, fixed-probe Q and target-Q stability, seed drift ≤ 1 mm, BC degradation ≤ 1.1×; 3 consecutive passes; any failure pauses RL) | Q gradients from an uncalibrated Critic moved the Actor away from working behaviour | `learner.critic_gate`, `hold_actor_until_critic_ready`, `monitor_every`, `gate_*` | Gate unit tests; held-Actor bitwise test |
+| Anneal the TD3+BC BC weight 1.0 → 0.3 over 3000 Critic updates counted only while RL is active | BC weight should fall only as the Critic earns trust | `bc_beta`, `bc_beta_end`, `bc_anneal_critic_updates` | Schedule and pause-clock tests |
+| Default Critic target `mc` (discounted return of applied commands) | A TD Critic of an Actor that never completes the task carries value only at the labelled terminal | `critic_target` (`td`, `td_mc_max` kept) | Existing target tests |
+| Run intervention BC only after episodes that add confirmed labels; no separate intervention BC in `rl` mode by default | Replaying all labels after every episode made BC ≈ 93% of Actor updates | `intervention_updates_per_episode`, `rl_intervention_updates_per_episode` | Label-gated BC test |
+| Add `actor_q_weight` (0 = matched BC control with identical schedule and batches) | Isolate the RL contribution in frozen evaluation | `actor_q_weight` | Bitwise Critic-independence test |
+| First Actor step at Critic update `critic_updates_per_actor`, not update 0 | The Actor was stepped on an untrained Critic | — | Updated cadence tests |
+| Wire `demo_success_only` and `demo_seed_success_episodes` | Both were read nowhere | config | Demo-rule tests |
+| Optional cosine Critic LR decay; per-episode BC/Q-gradient update counts; checkpoint format v4 (v3 migrates) | Auditable RL contribution and resumable gate state | `critic_lr_schedule`; metrics; `facet_online_adaptation_v4` | Round-trip and migration tests |
+
+The schedule follows the critic-gated TD3+BC procedure validated offline and the update
+cadence of the online run in which the Actor first completed insertions without human
+input. The gate does not establish robot success; use frozen `eval` runs, including the
+`actor_q_weight: 0` control, for that.
+
 ## 2026-10-18
 
 This date identifies the present correction, not the development date of inherited source.

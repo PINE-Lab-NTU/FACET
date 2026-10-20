@@ -59,7 +59,10 @@ def test_failure_kept_for_critic_excluded_from_demo(learner_config):
 def test_c1_td3_updates_and_full_resume(learner_config, tmp_path):
     learner = Learner(learner_config, mode="rl")
     learner.finish_episode(episode(learner), success=True)
-    assert learner.updates == 6 and learner.bc_updates == 2
+    # rl mode: confirmed labels reach the Actor through the annealed TD3+BC term, not extra BC steps,
+    # and the Actor is held at its BC seed until the Critic gate opens.
+    assert learner.updates == 6 and learner.bc_updates == 0
+    assert learner.td3_actor_updates == 0 and learner.held_actor_updates == 3
     assert learner.last_metrics["critic_loss"] >= 0
     path = tmp_path / "model.pt"
     contract = {"policy": "test", "frame": "native"}

@@ -9,6 +9,7 @@ from facet_adaptation.learner import Learner
 def test_interventions_different_from_actor_still_train_wrench(learner_config):
     learner = Learner(replace(
         learner_config, intervention_updates_per_episode=0, updates_per_transition=0, reference_dropout=0,
+        critic_gate=False, critic_updates_per_actor=1,
     ), mode="rl")
     x = learner.state_vector(np.ones(learner_config.embedding_dim), np.r_[np.zeros(6), 0.5, np.zeros(6)])
     reference = np.r_[np.zeros(6), 0.5].astype(np.float32)

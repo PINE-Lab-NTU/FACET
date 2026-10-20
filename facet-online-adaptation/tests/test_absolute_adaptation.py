@@ -34,6 +34,8 @@ def test_wrench_head_updates_and_target_actor_is_saved(learner_config, tmp_path)
             intervention_updates_per_episode=0,
             updates_per_transition=0,
             reference_dropout=0.0,
+            critic_gate=False,
+            critic_updates_per_actor=1,
         ),
         mode="rl",
     )
@@ -81,4 +83,4 @@ def test_resume_rejects_changed_td_rule(learner_config, tmp_path):
     import pytest
 
     with pytest.raises(ValueError, match="configuration mismatch"):
-        Learner(replace(learner_config, critic_target="mc")).load(path, {})
+        Learner(replace(learner_config, critic_target="td")).load(path, {})

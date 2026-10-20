@@ -28,8 +28,15 @@ class LearnerConfig:
     critic_lr: float = 1e-4
     gamma: float = 0.99
     tau: float = 0.005
-    bc_beta: float = 0.5 / 7
-    critic_target: str = "td"
+    # BC weight of the TD3+BC Actor objective. It starts at bc_beta when RL turns on and anneals
+    # linearly to bc_beta_end over bc_anneal_critic_updates Critic updates taken while RL is active.
+    bc_beta: float = 1.0
+    bc_beta_end: float = 0.3
+    bc_anneal_critic_updates: int = 3000
+    # Weight of the -Q1 term. 0 keeps every schedule, batch and BC step identical and removes only
+    # the Q gradient: the matched BC control for isolating the RL contribution.
+    actor_q_weight: float = 1.0
+    critic_target: str = "mc"
     td3_bc_target: str = "demo"
     demo_success_only: bool = True
     demo_seed_success_episodes: int = 0
@@ -38,7 +45,32 @@ class LearnerConfig:
     intervention_capacity: int = 10000
     updates_per_transition: int = 5
     critic_updates_per_actor: int = 20
+    # Separate intervention-BC steps run only after an episode adds new confirmed labels.
     intervention_updates_per_episode: int = 200
+    # In rl mode the confirmed labels reach the Actor through the annealed BC term of TD3+BC.
+    # A positive value adds separate intervention-BC steps there as well (they dominate the Actor).
+    rl_intervention_updates_per_episode: int = 0
+    # Critic readiness gate. Every monitor_every-th labelled episode is held out of all training.
+    critic_gate: bool = True
+    hold_actor_until_critic_ready: bool = True
+    monitor_every: int = 5
+    monitor_capacity: int = 5000
+    gate_eval_every: int = 50
+    gate_min_updates: int = 750
+    gate_consecutive_passes: int = 3
+    gate_min_terminals: int = 3
+    gate_terminal_brier_max: float = 0.1
+    gate_success_q_min: float = 0.7
+    gate_failure_q_abs_max: float = 0.3
+    gate_disagreement_max: float = 0.1
+    gate_fixed_q_delta_max: float = 0.02
+    gate_target_q_delta_max: float = 0.02
+    gate_seed_drift_max_m: float = 0.001
+    gate_bc_degradation_max: float = 1.1
+    # constant, or cosine decay to critic_lr_final over critic_lr_decay_updates after gate_min_updates.
+    critic_lr_schedule: str = "constant"
+    critic_lr_final: float = 2e-5
+    critic_lr_decay_updates: int = 1500
     target_noise_std: float = 0.2
     target_noise_clip: float = 0.5
     q_abort_threshold: float = 2.0
@@ -57,6 +89,10 @@ class LearnerConfig:
             "batch_size",
             "critic_updates_per_actor",
             "q_abort_consecutive",
+            "monitor_capacity",
+            "gate_eval_every",
+            "gate_consecutive_passes",
+            "gate_min_terminals",
         ):
             if not isinstance(getattr(self, key), int) or getattr(self, key) < 1:
                 raise ValueError(f"learner.{key} must be a positive integer")
@@ -68,9 +104,36 @@ class LearnerConfig:
             "intervention_updates_per_episode",
             "updates_per_transition",
             "demo_seed_success_episodes",
+            "rl_intervention_updates_per_episode",
+            "monitor_every",
+            "gate_min_updates",
+            "bc_anneal_critic_updates",
+            "critic_lr_decay_updates",
         ):
             if not isinstance(getattr(self, name), int) or getattr(self, name) < 0:
                 raise ValueError(f"learner.{name} must be a nonnegative integer")
+        if self.critic_gate and self.monitor_every < 1:
+            raise ValueError("critic_gate requires held-out monitor episodes (monitor_every >= 1)")
+        if not 0 < self.bc_beta_end <= self.bc_beta:
+            raise ValueError("BC annealing requires 0 < bc_beta_end <= bc_beta")
+        if self.actor_q_weight < 0:
+            raise ValueError("actor_q_weight must be nonnegative")
+        if self.critic_lr_schedule not in {"constant", "cosine"}:
+            raise ValueError("critic_lr_schedule must be constant or cosine")
+        if not 0 < self.critic_lr_final <= self.critic_lr:
+            raise ValueError("critic_lr_final must be positive and at most critic_lr")
+        for name in (
+            "gate_terminal_brier_max",
+            "gate_success_q_min",
+            "gate_failure_q_abs_max",
+            "gate_disagreement_max",
+            "gate_fixed_q_delta_max",
+            "gate_target_q_delta_max",
+            "gate_seed_drift_max_m",
+            "gate_bc_degradation_max",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"learner.{name} must be positive")
         if self.actor_mode != "absolute":
             raise ValueError("actor_mode must be absolute")
         if self.critic_target not in {"td", "mc", "td_mc_max"}:

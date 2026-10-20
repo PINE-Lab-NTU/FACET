@@ -13,5 +13,13 @@ learner:
   action_min: [-0.1, -0.1, 0.0, -0.3, -0.3, -0.3, 0.0]
   action_max: [0.1, 0.1, 0.2, 0.3, 0.3, 0.3, 1.0]
   action_mask: [true, true, true, true, true, true, true]
-  critic_target: td
+  critic_target: mc
+  td3_bc_target: demo
   demo_success_only: true
+  critic_gate: true
+  hold_actor_until_critic_ready: true
+  monitor_every: 5
+  bc_beta: 1.0
+  bc_beta_end: 0.3
+  bc_anneal_critic_updates: 3000
+  actor_q_weight: 1.0

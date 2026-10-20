@@ -29,6 +29,6 @@ runtime:
 learner:
   device: cpu
   actor_mode: absolute
-  critic_target: td
+  critic_target: mc
   td3_bc_target: demo
   demo_success_only: true
